@@ -1,0 +1,266 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../core/constants/app_constants.dart';
+import '../models/user_profile.dart';
+
+/// Service for managing user profile and settings
+class UserProfileService {
+  static final UserProfileService _instance = UserProfileService._internal();
+  factory UserProfileService() => _instance;
+  UserProfileService._internal();
+
+  UserProfile? _currentProfile;
+  bool _isInitialized = false;
+
+  // Callbacks
+  Function(UserProfile)? _onProfileUpdated;
+
+  /// Initialize the service and load profile
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+
+    try {
+      await _loadProfile();
+
+      // Create default profile if none exists
+      if (_currentProfile == null) {
+        await _createDefaultProfile();
+      }
+
+      _isInitialized = true;
+      debugPrint('UserProfileService: Initialized successfully');
+    } catch (e) {
+      debugPrint('UserProfileService: Initialization error - $e');
+      throw Exception('Failed to initialize user profile service: $e');
+    }
+  }
+
+  /// Load profile from storage
+  Future<void> _loadProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final profileJson = prefs.getString(AppConstants.userProfileKey);
+
+      if (profileJson != null) {
+        final profileData = json.decode(profileJson);
+        _currentProfile = UserProfile.fromJson(profileData);
+        // Profile loaded successfully
+      }
+    } catch (e) {
+      debugPrint('UserProfileService: Error loading profile - $e');
+    }
+  }
+
+  /// Save profile to storage
+  Future<void> _saveProfile() async {
+    if (_currentProfile == null) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final profileJson = json.encode(_currentProfile!.toJson());
+      await prefs.setString(AppConstants.userProfileKey, profileJson);
+
+      _onProfileUpdated?.call(_currentProfile!);
+      // Profile saved successfully
+    } catch (e) {
+      debugPrint('UserProfileService: Error saving profile - $e');
+    }
+  }
+
+  /// Create default profile
+  Future<void> _createDefaultProfile() async {
+    try {
+      _currentProfile = UserProfile(
+        id: 'user_${DateTime.now().millisecondsSinceEpoch}',
+        name: '', // User will need to fill this
+        email: '', // User will need to fill this
+        phoneNumber: null,
+        dateOfBirth: null,
+        bloodType: null,
+        emergencyContacts: [],
+        medicalConditions: [],
+        allergies: [],
+        medications: [],
+        preferences: const UserPreferences(
+          crashDetectionEnabled: true,
+          fallDetectionEnabled: true,
+          voiceVerificationEnabled: true,
+          aiVerificationEnabled: true,
+          automaticSOSEnabled: false,
+          sosCountdownDuration: 5,
+          locationSharingEnabled: true,
+          hazardAlertsEnabled: true,
+          communityFeaturesEnabled: true,
+          meshNetworkingEnabled: false,
+          crashSensitivity: 0.7,
+          fallSensitivity: 0.7,
+          preferredLanguage: 'en',
+          darkModeEnabled: true,
+          soundEnabled: true,
+          vibrationEnabled: true,
+          volume: 0.8,
+          notifications: NotificationSettings(),
+        ),
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      await _saveProfile();
+      debugPrint('UserProfileService: Default profile created');
+    } catch (e) {
+      debugPrint('UserProfileService: Error creating default profile - $e');
+      throw Exception('Failed to create default profile: $e');
+    }
+  }
+
+  /// Update profile
+  Future<UserProfile> updateProfile(UserProfile updatedProfile) async {
+    _currentProfile = updatedProfile.copyWith(updatedAt: DateTime.now());
+
+    await _saveProfile();
+    debugPrint('UserProfileService: Profile updated');
+    return _currentProfile!;
+  }
+
+  /// Update specific profile fields
+  Future<UserProfile> updateProfileFields({
+    String? name,
+    String? email,
+    String? phoneNumber,
+    DateTime? dateOfBirth,
+    String? bloodType,
+    List<String>? allergies,
+    List<String>? medications,
+    List<String>? medicalConditions,
+  }) async {
+    if (_currentProfile == null) {
+      throw Exception('No profile to update');
+    }
+
+    _currentProfile = _currentProfile!.copyWith(
+      name: name,
+      email: email,
+      phoneNumber: phoneNumber,
+      dateOfBirth: dateOfBirth,
+      bloodType: bloodType,
+      allergies: allergies,
+      medications: medications,
+      medicalConditions: medicalConditions,
+      updatedAt: DateTime.now(),
+    );
+
+    await _saveProfile();
+    return _currentProfile!;
+  }
+
+  /// Update user preferences
+  Future<UserPreferences> updatePreferences(
+    UserPreferences newPreferences,
+  ) async {
+    if (_currentProfile == null) {
+      throw Exception('No profile to update');
+    }
+
+    _currentProfile = _currentProfile!.copyWith(
+      preferences: newPreferences,
+      updatedAt: DateTime.now(),
+    );
+
+    await _saveProfile();
+    debugPrint('UserProfileService: Preferences updated');
+    return newPreferences;
+  }
+
+  /// Add emergency contact to profile
+  Future<void> addEmergencyContact(EmergencyContact contact) async {
+    if (_currentProfile == null) return;
+
+    final updatedContacts = List<EmergencyContact>.from(
+      _currentProfile!.emergencyContacts,
+    );
+    if (!updatedContacts.any((c) => c.id == contact.id)) {
+      updatedContacts.add(contact);
+
+      _currentProfile = _currentProfile!.copyWith(
+        emergencyContacts: updatedContacts,
+        updatedAt: DateTime.now(),
+      );
+
+      await _saveProfile();
+    }
+  }
+
+  /// Remove emergency contact from profile
+  Future<void> removeEmergencyContact(String contactId) async {
+    if (_currentProfile == null) return;
+
+    final updatedContacts = List<EmergencyContact>.from(
+      _currentProfile!.emergencyContacts,
+    );
+    updatedContacts.removeWhere((c) => c.id == contactId);
+
+    _currentProfile = _currentProfile!.copyWith(
+      emergencyContacts: updatedContacts,
+      updatedAt: DateTime.now(),
+    );
+
+    await _saveProfile();
+  }
+
+  /// Get profile completion percentage
+  double getProfileCompletionPercentage() {
+    if (_currentProfile == null) return 0.0;
+
+    int completedFields = 0;
+    int totalFields = 6; // Adjust based on required fields
+
+    if (_currentProfile!.name.isNotEmpty) completedFields++;
+    if (_currentProfile!.email?.isNotEmpty == true) completedFields++;
+    if (_currentProfile!.phoneNumber?.isNotEmpty == true) completedFields++;
+    if (_currentProfile!.dateOfBirth != null) completedFields++;
+    if (_currentProfile!.bloodType != null) completedFields++;
+    if (_currentProfile!.emergencyContacts.isNotEmpty) completedFields++;
+
+    return completedFields / totalFields;
+  }
+
+  /// Check if profile is complete enough for emergency use
+  bool isProfileReadyForEmergency() {
+    if (_currentProfile == null) return false;
+
+    return _currentProfile!.emergencyContacts.isNotEmpty &&
+        _currentProfile!.name.isNotEmpty &&
+        (_currentProfile!.phoneNumber?.isNotEmpty == true);
+  }
+
+  /// Get profile summary for emergency alerts
+  Map<String, String> getEmergencyProfileSummary() {
+    if (_currentProfile == null) return {};
+
+    return {
+      'name': _currentProfile!.name,
+      'phone': _currentProfile!.phoneNumber ?? '',
+      'bloodType': _currentProfile!.bloodType ?? 'Unknown',
+      'allergies': _currentProfile!.allergies.join(', '),
+      'medications': _currentProfile!.medications.join(', '),
+      'medicalConditions': _currentProfile!.medicalConditions.join(', '),
+    };
+  }
+
+  // Getters
+  bool get isInitialized => _isInitialized;
+  UserProfile? get currentProfile => _currentProfile;
+  UserPreferences? get currentPreferences => _currentProfile?.preferences;
+
+  // Event handlers
+  void setProfileUpdatedCallback(Function(UserProfile) callback) {
+    _onProfileUpdated = callback;
+  }
+
+  /// Dispose of the service
+  void dispose() {
+    _currentProfile = null;
+  }
+}

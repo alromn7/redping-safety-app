@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../redping_website2"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "redping_14v"
+	}
+}

@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0f172a">
+    <title>RedPing Emergency Alert</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #000000;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px;
+        }
+
+        .emergency-card {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1);
+            max-width: 420px;
+            width: 100%;
+            overflow: hidden;
+            animation: slideUp 0.4s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .card-header {
+            background: #000000;
+            padding: 2px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            overflow: hidden;
+            border-bottom: 1px solid rgba(220, 38, 38, 0.4);
+        }
+
+        .card-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(220, 38, 38, 0.1) 0%, transparent 70%);
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.2; }
+            50% { transform: scale(1.1); opacity: 0.4; }
+        }
+
+        .logo-container {
+            background: transparent;
+            width: 98px;
+            height: 98px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        .logo-container img {
+            width: 90%;
+            height: 90%;
+            object-fit: contain;
+        }
+
+        .brand-name {
+            color: white;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            margin-bottom: 2px;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+            position: relative;
+            z-index: 1;
+        }
+
+        .brand-tagline {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 8px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            position: relative;
+            z-index: 1;
+        }
+
+        .alert-badge {
+            background: rgba(220, 38, 38, 0.2);
+            backdrop-filter: blur(10px);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 50px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-top: 0px;
+            display: inline-block;
+            position: relative;
+            z-index: 1;
+            border: 1px solid rgba(220, 38, 38, 0.4);
+            animation: glow 2s ease-in-out infinite;
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 10px rgba(220, 38, 38, 0.3); }
+            50% { box-shadow: 0 0 20px rgba(220, 38, 38, 0.5); }
+        }
+
+        .card-body {
+            padding: 16px;
+        }
+
+        .emergency-type {
+            background: rgba(220, 38, 38, 0.15);
+            border-left: 3px solid #DC2626;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .emergency-type-label {
+            color: rgba(220, 38, 38, 0.8);
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+
+        .emergency-type-value {
+            color: #f3f4f6;
+            font-size: 18px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .user-info {
+            margin-bottom: 16px;
+        }
+
+        .user-name {
+            font-size: 22px;
+            font-weight: 800;
+            color: #f3f4f6;
+            margin-bottom: 6px;
+        }
+
+        .user-status {
+            color: #ef4444;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .pulse-dot {
+            width: 10px;
+            height: 10px;
+            background: #ef4444;
+            border-radius: 50%;
+            animation: pulseRing 2s ease-out infinite;
+            position: relative;
+        }
+
+        @keyframes pulseRing {
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            }
+            100% {
+                box-shadow: 0 0 0 12px rgba(239, 68, 68, 0);
+            }
+        }
+
+        .info-section {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .info-label {
+            color: #9ca3af;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .info-value {
+            color: #f3f4f6;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            word-break: break-all;
+        }
+
+        .action-buttons {
+            display: grid;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        .btn {
+            padding: 14px 20px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 700;
+            text-align: center;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            border: none;
+            cursor: pointer;
+            min-height: 48px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #DC2626 0%, #991B1B 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 6px 20px rgba(220, 38, 38, 0.6);
+            transform: translateY(-2px);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.5);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.08);
+            color: #f3f4f6;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(220, 38, 38, 0.5);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary:active {
+            transform: translateY(0);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .btn-app {
+            background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+            border: 2px solid rgba(59, 130, 246, 0.6);
+        }
+
+        .btn-app:hover {
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+            transform: translateY(-2px);
+        }
+
+        .btn-app:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+        }
+
+        .btn-icon {
+            font-size: 18px;
+        }
+
+        .metadata {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .metadata-item {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .metadata-label {
+            color: #9ca3af;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .metadata-value {
+            color: #f3f4f6;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .warning-banner {
+            background: rgba(220, 38, 38, 0.15);
+            border: 1px solid rgba(220, 38, 38, 0.4);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 16px;
+            text-align: center;
+        }
+
+        .warning-banner-text {
+            color: #fca5a5;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.5;
+        }
+
+        .card-footer {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 12px 16px;
+            text-align: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .footer-text {
+            color: #9ca3af;
+            font-size: 10px;
+            line-height: 1.5;
+        }
+
+        .footer-logo {
+            color: #ef4444;
+            font-weight: 700;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        /* Touch feedback */
+        .btn:active {
+            opacity: 0.85;
+        }
+
+        /* Status colors for different states */
+        .status-active {
+            border-left-color: #DC2626;
+        }
+        
+        .status-acknowledged {
+            border-left-color: #F59E0B;
+        }
+        
+        .status-resolved {
+            border-left-color: #10B981;
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 0;
+            }
+
+            .emergency-card {
+                border-radius: 0;
+                min-height: 100vh;
+                max-width: 100%;
+            }
+
+            .metadata {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+        }
+
+        /* Loading state */
+        .loading {
+            text-align: center;
+            padding: 30px;
+            color: #9ca3af;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.2);
+            border-top-color: #ef4444;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="loadingScreen" class="loading">
+        <div class="spinner"></div>
+        <p>Loading emergency alert...</p>
+    </div>
+
+    <div id="emergencyCard" class="emergency-card" style="display: none;">
+        <!-- Card Header with Logo -->
+        <div class="card-header">
+            <div class="logo-container">
+                <img id="logoImage" src="" alt="RedPing Logo" onerror="this.style.display='none'; this.parentElement.innerHTML='<div style=\'font-size: 60px;\'>🆘</div>';">
+            </div>
+            <div class="alert-badge">🚨 EMERGENCY</div>
+        </div>
+
+        <!-- Card Body -->
+        <div class="card-body">
+            <!-- Emergency Type -->
+            <div id="emergencyTypeSection" class="emergency-type status-active">
+                <div class="emergency-type-label">Emergency Type</div>
+                <div class="emergency-type-value">
+                    <span id="emergencyIcon">🚑</span>
+                    <span id="emergencyType">Vehicle Accident</span>
+                </div>
+            </div>
+
+            <!-- User Info -->
+            <div class="user-info">
+                <div class="user-name" id="userName">John Doe</div>
+                <div class="user-status">
+                    <span class="pulse-dot"></span>
+                    <span id="statusText">NEEDS IMMEDIATE HELP</span>
+                </div>
+            </div>
+
+            <!-- Action Instructions -->
+            <div class="info-section">
+                <div class="info-label">⚠️ IMMEDIATE ACTION</div>
+                <div class="info-value" style="display: block; line-height: 1.8;">
+                    <div>1️⃣ Call the number below immediately</div>
+                    <div>2️⃣ Verify person is conscious and safe</div>
+                    <div>3️⃣ If no answer → Call 911 NOW</div>
+                </div>
+            </div>
+
+            <!-- Phone Number -->
+            <div class="info-section">
+                <div class="info-label">📞 Emergency Contact</div>
+                <div class="info-value" id="phoneNumber">+61 412 345 678</div>
+            </div>
+
+            <!-- Location -->
+            <div class="info-section">
+                <div class="info-label">📍 Last Known Location</div>
+                <div class="info-value" id="location">123 Main St, Sydney NSW</div>
+                <div class="info-value" style="font-size: 12px; color: #6B7280; margin-top: 4px;" id="coordinates">
+                    GPS: -33.868800, 151.209300
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+                <a href="#" id="callButton" class="btn btn-primary">
+                    <span class="btn-icon">📞</span>
+                    CALL NOW
+                </a>
+                <a href="#" id="trackButton" class="btn btn-app">
+                    <span class="btn-icon">�</span>
+                    Open in RedPing App
+                </a>
+                <a href="#" id="mapButton" class="btn btn-secondary">
+                    <span class="btn-icon">�️</span>
+                    View on Map
+                </a>
+            </div>
+
+            <!-- Metadata -->
+            <div class="metadata">
+                <div class="metadata-item">
+                    <div class="metadata-label">Alert Time</div>
+                    <div class="metadata-value" id="alertTime">2:45 PM</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Alert Number</div>
+                    <div class="metadata-value" id="alertNumber">1 of 5</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Battery Level</div>
+                    <div class="metadata-value" id="batteryLevel">85%</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Speed</div>
+                    <div class="metadata-value" id="speed">0 km/h</div>
+                </div>
+            </div>
+
+            <!-- Warning Banner -->
+            <div class="warning-banner">
+                <div class="warning-banner-text">
+                    ⚠️ DO NOT CANCEL THIS ALERT<br>
+                    until you have confirmed the person is safe
+                </div>
+            </div>
+        </div>
+
+        <!-- Card Footer -->
+        <div class="card-footer">
+            <div class="footer-text">
+                This is an official emergency alert from the RedPing<br>
+                Emergency Response System. Please respond immediately.
+            </div>
+            <div class="footer-logo">Powered by @REDP!NG</div>
+        </div>
+    </div>
+
+    <script>
+        // Parse URL parameters - supports both query params and path-based sessionId
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            
+            // Extract session ID from path: /sos/<sessionId> or /emergency/<sessionId>
+            const pathMatch = window.location.pathname.match(/\/(sos|emergency)\/([a-zA-Z0-9_-]+)/);
+            const sessionId = pathMatch ? pathMatch[2] : (params.get('sid') || 'demo');
+            
+            return {
+                sessionId: sessionId,
+                userName: params.get('name') || 'RedPing User',
+                userPhone: params.get('phone') || '+61 400 000 000',
+                emergencyType: params.get('type') || 'accident',
+                location: params.get('loc') || 'Location unavailable',
+                coordinates: params.get('coords') || '',
+                mapLink: params.get('map') || '#',
+                trackLink: `redping://sos/${sessionId}`, // Always use app deep link with session ID
+                alertTime: params.get('time') || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                alertNumber: params.get('alert') || '1',
+                batteryLevel: params.get('battery') || 'N/A',
+                speed: params.get('speed') || 'N/A',
+                status: params.get('status') || 'active'
+            };
+        }
+
+        // Emergency type icons and labels
+        const emergencyTypes = {
+            'accident': { icon: '🚗', label: 'Vehicle Accident' },
+            'fall': { icon: '🤕', label: 'Fall Detected' },
+            'medical': { icon: '🏥', label: 'Medical Emergency' },
+            'manual': { icon: '🆘', label: 'Manual SOS Activation' },
+            'other': { icon: '⚠️', label: 'Emergency Alert' }
+        };
+
+        // Status messages
+        const statusMessages = {
+            'active': 'NEEDS IMMEDIATE HELP',
+            'acknowledged': 'SAR TEAM RESPONDING',
+            'resolved': 'CONFIRMED SAFE',
+            'cancelled': 'ALERT CANCELLED'
+        };
+
+        // Add visual feedback to buttons
+        function addButtonFeedback() {
+            const buttons = document.querySelectorAll('.btn');
+            buttons.forEach(btn => {
+                btn.addEventListener('touchstart', function() {
+                    this.style.transform = 'scale(0.98)';
+                });
+                btn.addEventListener('touchend', function() {
+                    this.style.transform = '';
+                });
+                
+                // Track button clicks for analytics
+                btn.addEventListener('click', function(e) {
+                    const action = this.id.replace('Button', '');
+                    console.log(`Emergency action: ${action} clicked`);
+                });
+            });
+        }
+
+        // Apply status-based styling
+        function applyStatusStyling(status) {
+            const typeSection = document.getElementById('emergencyTypeSection');
+            typeSection.classList.remove('status-active', 'status-acknowledged', 'status-resolved');
+            
+            switch(status) {
+                case 'acknowledged':
+                    typeSection.classList.add('status-acknowledged');
+                    break;
+                case 'resolved':
+                    typeSection.classList.add('status-resolved');
+                    break;
+                default:
+                    typeSection.classList.add('status-active');
+            }
+        }
+
+        // Load and display emergency data
+        function loadEmergencyData() {
+            const params = getUrlParams();
+            const emergencyInfo = emergencyTypes[params.emergencyType] || emergencyTypes.other;
+
+            // Set logo from production CDN
+            const logoPath = 'https://redping-a2e37.web.app/assets/images/REDP!NG.png';
+            const logoImg = document.getElementById('logoImage');
+            logoImg.src = logoPath;
+
+            // Populate card data
+            document.getElementById('emergencyIcon').textContent = emergencyInfo.icon;
+            document.getElementById('emergencyType').textContent = emergencyInfo.label;
+            document.getElementById('userName').textContent = params.userName;
+            document.getElementById('statusText').textContent = statusMessages[params.status] || statusMessages.active;
+            document.getElementById('phoneNumber').textContent = params.userPhone;
+            document.getElementById('location').textContent = params.location;
+            
+            if (params.coordinates) {
+                document.getElementById('coordinates').textContent = `GPS: ${params.coordinates}`;
+            } else {
+                document.getElementById('coordinates').style.display = 'none';
+            }
+
+            document.getElementById('alertTime').textContent = params.alertTime;
+            document.getElementById('alertNumber').textContent = `${params.alertNumber} of 5`;
+            document.getElementById('batteryLevel').textContent = params.batteryLevel === 'N/A' ? 'N/A' : params.batteryLevel + '%';
+            document.getElementById('speed').textContent = params.speed === 'N/A' ? 'N/A' : params.speed + ' km/h';
+
+            // Apply status styling
+            applyStatusStyling(params.status);
+
+            // Set button links with fallback handling
+            const callBtn = document.getElementById('callButton');
+            const cleanPhone = params.userPhone.replace(/\s/g, '');
+            callBtn.href = `tel:${cleanPhone}`;
+            
+            const mapBtn = document.getElementById('mapButton');
+            mapBtn.href = params.mapLink;
+            if (params.mapLink === '#') {
+                mapBtn.style.opacity = '0.5';
+                mapBtn.style.pointerEvents = 'none';
+            }
+            
+            const trackBtn = document.getElementById('trackButton');
+            trackBtn.href = params.trackLink;
+            
+            // Add click handler to detect if app is installed
+            trackBtn.addEventListener('click', function(e) {
+                // Try to open the app
+                const appOpened = Date.now();
+                window.location.href = params.trackLink;
+                
+                // Check if app opened after a short delay
+                setTimeout(() => {
+                    const timeElapsed = Date.now() - appOpened;
+                    // If still on page after 2 seconds, app probably not installed
+                    if (document.hasFocus() && timeElapsed >= 2000) {
+                        alert('RedPing app not detected.\n\nPlease install RedPing from the App Store or Play Store to track this emergency live.');
+                    }
+                }, 2500);
+            });
+
+            // Add button feedback
+            addButtonFeedback();
+
+            // Show card, hide loading
+            setTimeout(() => {
+                document.getElementById('loadingScreen').style.display = 'none';
+                document.getElementById('emergencyCard').style.display = 'block';
+            }, 400);
+        }
+
+        function updateCardStyling(status) {
+            const header = document.querySelector('.card-header');
+            const badge = document.querySelector('.alert-badge');
+
+            switch(status) {
+                case 'acknowledged':
+                    header.style.background = 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)';
+                    badge.textContent = '🚑 SAR RESPONDING';
+                    break;
+                case 'resolved':
+                    header.style.background = 'linear-gradient(135deg, #10B981 0%, #059669 100%)';
+                    badge.textContent = '✅ ALL CLEAR';
+                    break;
+                case 'cancelled':
+                    header.style.background = 'linear-gradient(135deg, #6B7280 0%, #4B5563 100%)';
+                    badge.textContent = '⏹️ CANCELLED';
+                    break;
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', loadEmergencyData);
+
+        // Add click tracking
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('btn')) {
+                const action = e.target.id.replace('Button', '');
+                console.log(`Emergency card action: ${action}`);
+                
+                // Could send analytics here
+                // trackEmergencyCardAction(action);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "557287609270",
+    "project_id": "redping-a2e37",
+    "storage_bucket": "redping-a2e37.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:557287609270:android:ee97c332c47695a6832717",
+        "android_client_info": {
+          "package_name": "com.redping.redping"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "557287609270-dugl5fep3crffuf50r4ruffm72oa9k99.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.redping",
+            "certificate_hash": "df3043a5f6295bed6cf3b7b2753dc5d97626b88a"
+          }
+        },
+        {
+          "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBJhW4EHzPwzfxuauXSB1k30w_rTml6Po"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "557287609270-ac22958el646s643t56esirqoj60luf2.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.redping.redping"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

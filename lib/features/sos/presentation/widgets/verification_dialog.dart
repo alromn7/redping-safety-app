@@ -1,0 +1,1223 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../../../../core/theme/app_theme.dart';
+import '../../../../models/verification_result.dart';
+import '../../../../services/ai_verification_service.dart';
+
+/// Dialog for AI verification of crash/fall detection with voice interaction
+class VerificationDialog extends StatefulWidget {
+  final DetectionEvent detectionEvent;
+  final AIVerificationService verificationService;
+  final Function(bool shouldProceedWithSOS) onVerificationComplete;
+
+  const VerificationDialog({
+    super.key,
+    required this.detectionEvent,
+    required this.verificationService,
+    required this.onVerificationComplete,
+  });
+
+  @override
+  State<VerificationDialog> createState() => _VerificationDialogState();
+}
+
+class _VerificationDialogState extends State<VerificationDialog>
+    with TickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late AnimationController _countdownController;
+  late AnimationController _waveController;
+  late Animation<double> _pulseAnimation;
+  late Animation<double> _countdownAnimation;
+  late Animation<double> _waveAnimation;
+
+  // Voice recognition
+  late stt.SpeechToText _speechToText;
+  late FlutterTts _flutterTts;
+  bool _speechEnabled = false;
+  bool _ttsEnabled = false;
+  String _lastWords = '';
+  double _confidence = 0.0;
+  double _soundLevel = 0.0; // 0.0 - 1.0 normalized
+  bool _micGranted = false;
+  bool _micPermanentlyDenied = false;
+
+  Timer? _countdownTimer;
+  Timer? _conversationTimer;
+  int _secondsRemaining = 30;
+  bool _isListening = false;
+  bool _isAISpeaking = false;
+  String _currentPhase = 'Analyzing...';
+  String _detectionDetails = '';
+  int _conversationStep = 0;
+  bool _userResponded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeVoiceServices();
+    _setupAnimations();
+    _setupVerificationCallbacks();
+    _generateDetectionDetails();
+    _startCountdown();
+    _startAIConversation();
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _countdownController.dispose();
+    _waveController.dispose();
+    _countdownTimer?.cancel();
+    _conversationTimer?.cancel();
+    _speechToText.stop();
+    _flutterTts.stop();
+    super.dispose();
+  }
+
+  /// Initialize voice recognition and TTS
+  Future<void> _initializeVoiceServices() async {
+    try {
+      // Ensure microphone permission first
+      await _ensureMicPermission();
+      if (!_micGranted) {
+        debugPrint('VerificationDialog: Microphone permission not granted');
+      }
+
+      // Initialize Speech-to-Text
+      _speechToText = stt.SpeechToText();
+
+      // Check if speech recognition is available on device
+      final available = await _speechToText.initialize(
+        debugLogging: true,
+        onError: (error) {
+          debugPrint('Speech recognition error: $error');
+          _logEvent('stt_error', details: error.errorMsg);
+          setState(() => _isListening = false);
+        },
+        onStatus: (status) {
+          debugPrint('Speech recognition status: $status');
+          _logEvent('stt_status', details: status);
+          if (status == 'done' || status == 'notListening') {
+            setState(() => _isListening = false);
+            // Auto-restart listening if user hasn't responded yet and dialog active
+            if (mounted &&
+                !_userResponded &&
+                !_isAISpeaking &&
+                _secondsRemaining > 0) {
+              Future.delayed(const Duration(milliseconds: 350), () {
+                if (mounted && !_isAISpeaking && !_userResponded) {
+                  _restartListening();
+                }
+              });
+            }
+          }
+        },
+      );
+
+      _speechEnabled = available;
+
+      // Log available locales for debugging
+      if (_speechEnabled) {
+        final locales = await _speechToText.locales();
+        _logEvent(
+          'stt_locales_available',
+          details:
+              'count=${locales.length} first=${locales.isNotEmpty ? locales.first.localeId : "none"}',
+        );
+
+        // Check if en-US is available
+        final hasEnUS = locales.any(
+          (l) => l.localeId.toLowerCase().contains('en'),
+        );
+        _logEvent('stt_locale_check', details: 'hasEnglish=$hasEnUS');
+      }
+
+      _logEvent(
+        'stt_initialized',
+        details:
+            'enabled=${_speechEnabled.toString()} micGranted=$_micGranted available=$available',
+      );
+
+      // Initialize Text-to-Speech
+      _flutterTts = FlutterTts();
+      await _flutterTts.setLanguage('en-US');
+      await _flutterTts.setSpeechRate(0.5); // Slower, clearer speech
+      await _flutterTts.setVolume(1.0);
+      await _flutterTts.setPitch(1.0);
+
+      _flutterTts.setStartHandler(() {
+        if (mounted) setState(() => _isAISpeaking = true);
+      });
+
+      _flutterTts.setCompletionHandler(() {
+        if (mounted) setState(() => _isAISpeaking = false);
+        // Start listening after AI finishes speaking
+        _logEvent('tts_completed');
+        _startListening();
+      });
+
+      _ttsEnabled = true;
+      debugPrint('Voice services initialized successfully');
+      _logEvent(
+        'voice_services_ready',
+        details: 'tts=$_ttsEnabled stt=$_speechEnabled',
+      );
+      if (_speechEnabled && _micGranted) {
+        _logEvent('stt_initial_listen');
+        await _startListening();
+      }
+      // Safety net: ensure we attempt to listen shortly after init
+      Future.delayed(const Duration(milliseconds: 1500), () async {
+        if (!mounted || _userResponded) return;
+        if (!_isAISpeaking && _speechEnabled && _micGranted) {
+          // If no status logs and not listening, try starting
+          _logEvent('stt_watchdog_start');
+          if (!_isListening) {
+            await _startListening();
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('Error initializing voice services: $e');
+      _speechEnabled = false;
+      _ttsEnabled = false;
+      _logEvent('voice_services_error', details: e.toString());
+    }
+  }
+
+  Future<void> _ensureMicPermission() async {
+    final status = await Permission.microphone.status;
+    if (status.isGranted) {
+      setState(() {
+        _micGranted = true;
+        _micPermanentlyDenied = false;
+      });
+      return;
+    }
+    final req = await Permission.microphone.request();
+    setState(() {
+      _micGranted = req.isGranted;
+      _micPermanentlyDenied = req.isPermanentlyDenied;
+    });
+  }
+
+  /// Start listening for user's voice
+  Future<void> _startListening() async {
+    _logEvent(
+      'stt_start_listening_called',
+      details:
+          'enabled=$_speechEnabled listening=$_isListening responded=$_userResponded micGranted=$_micGranted',
+    );
+
+    if (!_speechEnabled) {
+      _logEvent('stt_start_blocked', details: 'speech_not_enabled');
+      return;
+    }
+    if (_isListening) {
+      _logEvent('stt_start_blocked', details: 'already_listening');
+      return;
+    }
+    if (_userResponded) {
+      _logEvent('stt_start_blocked', details: 'user_already_responded');
+      return;
+    }
+
+    if (!_micGranted) {
+      _logEvent('stt_mic_not_granted', details: 'requesting_permission');
+      // Retry permission if not permanently denied
+      if (!_micPermanentlyDenied) {
+        await _ensureMicPermission();
+      }
+      if (!_micGranted) {
+        _logEvent('stt_start_blocked', details: 'mic_permission_denied');
+        return;
+      }
+    }
+
+    try {
+      _logEvent('stt_calling_listen_method');
+      setState(() {
+        _isListening = true;
+        _lastWords = '';
+      });
+
+      await _speechToText.listen(
+        onResult: (result) {
+          _logEvent(
+            'stt_onResult_callback',
+            details:
+                'words="${result.recognizedWords}" conf=${result.confidence.toStringAsFixed(2)} final=${result.finalResult}',
+          );
+          setState(() {
+            _lastWords = result.recognizedWords.toLowerCase();
+            _confidence = result.confidence;
+          });
+
+          // Check for positive responses
+          if (_isPositiveResponse(_lastWords)) {
+            _logEvent('stt_positive_response_detected', details: _lastWords);
+            _handleUserOK();
+          }
+          // Check for help requests
+          else if (_isHelpRequest(_lastWords)) {
+            _logEvent('stt_help_request_detected', details: _lastWords);
+            _handleUserNeedsHelp();
+          } else {
+            _logEvent(
+              'stt_no_match',
+              details: 'words="$_lastWords" not recognized as command',
+            );
+          }
+        },
+        listenFor: const Duration(seconds: 15),
+        pauseFor: const Duration(seconds: 3),
+        localeId: 'en-US',
+        listenOptions: stt.SpeechListenOptions(
+          partialResults: true,
+          cancelOnError: false,
+          listenMode: stt.ListenMode.confirmation,
+        ),
+        onSoundLevelChange: (level) {
+          // Normalize typical level range (plugin often 0..100)
+          double normalized = level;
+          if (normalized.isNaN) normalized = 0.0;
+          if (normalized > 1.0) normalized = normalized / 100.0;
+          normalized = normalized.clamp(0.0, 1.0);
+          if (mounted) {
+            setState(() => _soundLevel = normalized);
+            if (normalized > 0.1) {
+              _logEvent(
+                'stt_sound_detected',
+                details: 'level=${normalized.toStringAsFixed(2)}',
+              );
+            }
+          }
+        },
+      );
+
+      _logEvent(
+        'stt_listen_method_completed',
+        details: 'isListening=${_speechToText.isListening}',
+      );
+
+      // Add a watchdog: if recognizer didn't truly engage, try a restart
+      Future.delayed(const Duration(seconds: 2), () async {
+        if (!mounted || _userResponded) return;
+        final actuallyListening = _speechToText.isListening;
+        _logEvent(
+          'stt_watchdog_check',
+          details:
+              'actuallyListening=$actuallyListening isAISpeaking=$_isAISpeaking',
+        );
+        if (!actuallyListening && !_isAISpeaking) {
+          _logEvent('stt_watchdog_restart');
+          await _restartListening();
+        }
+      });
+    } catch (e) {
+      debugPrint('Error starting speech recognition: $e');
+      _logEvent('stt_listen_error', details: e.toString());
+      setState(() => _isListening = false);
+    }
+  }
+
+  Future<void> _restartListening() async {
+    try {
+      await _speechToText.stop();
+    } catch (_) {}
+    _logEvent('stt_restart');
+    // If repeated restarts fail, reinitialize the STT engine
+    if (!_micGranted) return;
+    if (!_speechEnabled) {
+      await _reinitializeSTTEngine();
+    }
+    await _startListening();
+  }
+
+  // Structured logging to aid debugging and telemetry
+  void _logEvent(String type, {String? details}) {
+    final msg =
+        'VerificationDialogLog: $type${details != null ? ' -> $details' : ''}';
+    debugPrint(msg);
+  }
+
+  Future<void> _reinitializeSTTEngine() async {
+    try {
+      _speechToText = stt.SpeechToText();
+      _speechEnabled = await _speechToText.initialize(
+        debugLogging: true,
+        onError: (e) {
+          _logEvent('stt_reinit_error', details: e.errorMsg);
+        },
+        onStatus: (s) {
+          _logEvent('stt_reinit_status', details: s);
+        },
+      );
+      _logEvent(
+        'stt_reinitialized',
+        details: 'enabled=${_speechEnabled.toString()}',
+      );
+    } catch (e) {
+      _logEvent('stt_reinit_exception', details: e.toString());
+      _speechEnabled = false;
+    }
+  }
+
+  /// Check if user's response indicates they're OK
+  bool _isPositiveResponse(String text) {
+    const okPhrases = [
+      "i'm ok",
+      "i'm okay",
+      "im ok",
+      "im okay",
+      "i am ok",
+      "i am okay",
+      "yes",
+      "yeah",
+      "fine",
+      "i'm fine",
+      "all good",
+      "no problem",
+      "cancel",
+      "stop",
+    ];
+    return okPhrases.any((phrase) => text.contains(phrase));
+  }
+
+  /// Check if user is requesting help
+  bool _isHelpRequest(String text) {
+    const helpPhrases = [
+      "help",
+      "emergency",
+      "need help",
+      "not okay",
+      "not ok",
+      "hurt",
+      "injured",
+      "accident",
+    ];
+    return helpPhrases.any((phrase) => text.contains(phrase));
+  }
+
+  /// AI speaks to the user
+  Future<void> _speak(String text) async {
+    if (!_ttsEnabled || _isAISpeaking) return;
+
+    try {
+      await _flutterTts.speak(text);
+    } catch (e) {
+      debugPrint('Error speaking: $e');
+    }
+  }
+
+  /// Start AI conversation flow
+  void _startAIConversation() {
+    // Wait 2 seconds for dialog to appear, then start speaking
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted || _userResponded) return;
+      _nextConversationStep();
+    });
+    // Conversation watchdog: if we never enter listening within 5s of showing dialog, force a listen attempt
+    Future.delayed(const Duration(seconds: 5), () async {
+      if (!mounted || _userResponded) return;
+      if (!_isListening && !_isAISpeaking && _speechEnabled && _micGranted) {
+        _logEvent('conversation_watchdog_force_listen');
+        await _startListening();
+      }
+    });
+  }
+
+  /// Progress through conversation steps
+  void _nextConversationStep() {
+    if (!mounted || _userResponded) return;
+
+    setState(() => _conversationStep++);
+
+    String message;
+    switch (_conversationStep) {
+      case 1:
+        message = "Hello, are you okay? We detected a possible accident.";
+        _currentPhase = "AI asking if you're okay...";
+        break;
+      case 2:
+        message = "If you can hear me, please say I'm okay, or tap the button.";
+        _currentPhase = "Waiting for your response...";
+        break;
+      case 3:
+        message = "This is your last chance. Are you safe?";
+        _currentPhase = "Final verification...";
+        break;
+      default:
+        return;
+    }
+
+    _speak(message);
+
+    // Schedule next step if no response
+    _conversationTimer?.cancel();
+    _conversationTimer = Timer(const Duration(seconds: 8), () {
+      if (!mounted || _userResponded) return;
+      if (_conversationStep < 3) {
+        _nextConversationStep();
+      }
+    });
+  }
+
+  /// Handle user confirming they're OK
+  void _handleUserOK() {
+    if (_userResponded) return;
+
+    setState(() {
+      _userResponded = true;
+      _isListening = false;
+      _currentPhase = "Great! You're safe. Canceling emergency alert.";
+    });
+    _logEvent(
+      'user_ok',
+      details:
+          'secondsRemaining=$_secondsRemaining lastWords=$_lastWords conf=${_confidence.toStringAsFixed(2)}',
+    );
+
+    _speak("Great! I'm glad you're safe. Canceling the emergency alert.");
+
+    _conversationTimer?.cancel();
+    _countdownTimer?.cancel();
+
+    widget.verificationService.recordUserInteraction(InteractionType.cancelTap);
+
+    // Delay to let user hear the response
+    Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      widget.onVerificationComplete(false);
+      Navigator.of(context).pop();
+    });
+  }
+
+  /// Handle user requesting help
+  void _handleUserNeedsHelp() {
+    if (_userResponded) return;
+
+    setState(() {
+      _userResponded = true;
+      _isListening = false;
+      _currentPhase = "Help is on the way!";
+    });
+    _logEvent(
+      'user_help',
+      details:
+          'secondsRemaining=$_secondsRemaining lastWords=$_lastWords conf=${_confidence.toStringAsFixed(2)}',
+    );
+
+    _speak(
+      "Understood. Contacting emergency services immediately. Help is on the way.",
+    );
+
+    _conversationTimer?.cancel();
+    _countdownTimer?.cancel();
+
+    // Proceed with SOS
+    Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      widget.onVerificationComplete(true);
+      Navigator.of(context).pop();
+    });
+  }
+
+  void _setupAnimations() {
+    _pulseController = AnimationController(
+      duration: const Duration(seconds: 1),
+      vsync: this,
+    );
+
+    _countdownController = AnimationController(
+      duration: const Duration(seconds: 30),
+      vsync: this,
+    );
+
+    _waveController = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
+
+    _pulseAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+
+    _countdownAnimation = Tween<double>(
+      begin: 1.0,
+      end: 0.0,
+    ).animate(_countdownController);
+
+    _waveAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _waveController, curve: Curves.easeInOut),
+    );
+
+    _pulseController.repeat(reverse: true);
+    _countdownController.forward();
+    _waveController.repeat(reverse: true);
+  }
+
+  void _setupVerificationCallbacks() {
+    widget.verificationService.setVerificationCallback(_onVerificationResult);
+  }
+
+  void _generateDetectionDetails() {
+    final ctx = widget.detectionEvent.context;
+    final type = ctx.type == DetectionType.crash ? 'Crash' : 'Fall';
+    final magnitude = ctx.magnitude.toStringAsFixed(1);
+
+    setState(() {
+      _detectionDetails = '$type detected ($magnitude m/s²)';
+
+      if (ctx.deceleration != null) {
+        _detectionDetails +=
+            '\nDeceleration: ${ctx.deceleration!.toStringAsFixed(1)} m/s²';
+      }
+
+      if (ctx.jerk != null) {
+        _detectionDetails += '\nJerk: ${ctx.jerk!.toStringAsFixed(1)} m/s³';
+      }
+
+      _currentPhase = 'Voice verification in progress...';
+      _isListening = true;
+    });
+  }
+
+  void _startCountdown() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _secondsRemaining--;
+        if (_secondsRemaining <= 0) {
+          timer.cancel();
+          _onTimeout();
+        }
+      });
+    });
+  }
+
+  void _onVerificationResult(VerificationResult result) {
+    if (!mounted) return;
+
+    setState(() {
+      _isListening = false;
+      _currentPhase = result.outcomeDescription;
+    });
+
+    // Delay to show result, then complete
+    Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      widget.onVerificationComplete(result.requiresSOS);
+      Navigator.of(context).pop();
+    });
+  }
+
+  void _onTimeout() {
+    // If no response, proceed with SOS
+    widget.onVerificationComplete(true);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  void _onUserCanceled() {
+    _handleUserOK();
+  }
+
+  Color _getStatusColor() {
+    if (_isListening) return AppTheme.warningOrange;
+    if (_secondsRemaining <= 10) return AppTheme.primaryRed;
+    return AppTheme.infoBlue;
+  }
+
+  IconData _getStatusIcon() {
+    if (_isListening) return Icons.mic;
+    if (_secondsRemaining <= 10) return Icons.warning;
+    return Icons.psychology;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false, // Prevent dismissal
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
+            maxWidth: MediaQuery.of(context).size.width * 0.92,
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF121212),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 18,
+                  spreadRadius: 2,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Animated status icon with voice waveforms
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Voice waveform rings (only when listening or speaking)
+                      if (_isListening || _isAISpeaking)
+                        ...List.generate(3, (index) {
+                          return AnimatedBuilder(
+                            animation: _waveAnimation,
+                            builder: (context, child) {
+                              final delay = index * 0.2;
+                              final progress =
+                                  (_waveAnimation.value + delay) % 1.0;
+                              final levelBoost = 1.0 + (_soundLevel * 0.6);
+                              return Container(
+                                width: (80 + (progress * 60)) * levelBoost,
+                                height: (80 + (progress * 60)) * levelBoost,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: _getStatusColor().withValues(
+                                      alpha: 0.3 * (1 - progress),
+                                    ),
+                                    width: 2,
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        }),
+
+                      // Main status icon
+                      AnimatedBuilder(
+                        animation: _pulseAnimation,
+                        builder: (context, child) {
+                          return Transform.scale(
+                            scale: (_isListening || _isAISpeaking)
+                                ? _pulseAnimation.value
+                                : 1.0,
+                            child: Container(
+                              width: 80,
+                              height: 80,
+                              decoration: BoxDecoration(
+                                color: _getStatusColor().withValues(
+                                  alpha: 0.15,
+                                ),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: _getStatusColor(),
+                                  width: 3,
+                                ),
+                              ),
+                              child: Icon(
+                                _getStatusIcon(),
+                                size: 40,
+                                color: _getStatusColor(),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Voice status indicator
+                  if (_isListening || _isAISpeaking)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor().withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _getStatusColor().withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _isListening ? Icons.mic : Icons.volume_up,
+                            size: 16,
+                            color: _getStatusColor(),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _isListening
+                                ? (_micGranted
+                                      ? 'Listening...'
+                                      : (_micPermanentlyDenied
+                                            ? 'Mic permission required'
+                                            : 'Requesting mic permission...'))
+                                : 'AI Speaking...',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _getStatusColor(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Mic permission helper
+                  if (!_micGranted)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Column(
+                        children: [
+                          Text(
+                            _micPermanentlyDenied
+                                ? 'Microphone access is blocked. Please enable it in Settings.'
+                                : 'Microphone permission is needed for voice verification.',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppTheme.secondaryText,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (!_micPermanentlyDenied)
+                                OutlinedButton(
+                                  onPressed: _ensureMicPermission,
+                                  child: const Text('Grant Microphone'),
+                                )
+                              else
+                                OutlinedButton(
+                                  onPressed: openAppSettings,
+                                  child: const Text('Open Settings'),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  if (_isListening || _isAISpeaking) const SizedBox(height: 12),
+
+                  // Show recognized words
+                  if (_lastWords.isNotEmpty && _isListening)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.hearing,
+                            size: 16,
+                            color: Colors.white70,
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              'Heard: "$_lastWords" (${(_confidence * 100).toStringAsFixed(0)}%)',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.white70,
+                                fontStyle: FontStyle.italic,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  if (_lastWords.isNotEmpty && _isListening)
+                    const SizedBox(height: 12),
+
+                  // Title and subtitle (friendlier tone)
+                  Text(
+                    'Are you okay?',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      height: 1.1,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "We detected a possible incident. If you're safe, let us know.",
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Detection details (more legible)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      _detectionDetails,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.4,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Current phase + listening hint
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 10,
+                      horizontal: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _getStatusColor().withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _getStatusColor().withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          _currentPhase,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _isListening
+                              ? "Try saying ‘I'm OK’ or tap the button below"
+                              : 'Processing response…',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.white70,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+                  // Early action buttons to ensure visibility on small screens
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _userResponded ? null : _onUserCanceled,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _userResponded
+                                ? Colors.grey
+                                : Colors.green.shade600,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const Text(
+                            "I'M OK",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.05,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _userResponded
+                              ? null
+                              : _handleUserNeedsHelp,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _userResponded
+                                ? Colors.grey
+                                : AppTheme.criticalRed,
+                            side: BorderSide(
+                              color: _userResponded
+                                  ? Colors.grey
+                                  : AppTheme.criticalRed,
+                              width: 2,
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'I NEED HELP',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Countdown progress (larger ring)
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: 112,
+                        height: 112,
+                        child: AnimatedBuilder(
+                          animation: _countdownAnimation,
+                          builder: (context, child) {
+                            return CircularProgressIndicator(
+                              value: _countdownAnimation.value,
+                              strokeWidth: 8,
+                              backgroundColor: Colors.white24,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                _secondsRemaining <= 10
+                                    ? AppTheme.primaryRed
+                                    : Colors.lightBlueAccent,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      Column(
+                        children: [
+                          Text(
+                            '$_secondsRemaining',
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: _secondsRemaining <= 10
+                                  ? AppTheme.primaryRed
+                                  : Colors.white,
+                            ),
+                          ),
+                          Text(
+                            _secondsRemaining <= 1 ? 'second' : 'seconds',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white70,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Auto SOS if no response',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Instructions
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.info_outline,
+                              color: Colors.white70,
+                              size: 18,
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                "If you're safe, you can:",
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          "• Say ‘I'm OK’ out loud\n• Tap the I'm OK button below\n• Move your device deliberately",
+                          style: TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Early action buttons (compact)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _userResponded ? null : _onUserCanceled,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _userResponded
+                                ? Colors.grey
+                                : Colors.green.shade600,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const Text(
+                            "I'M OK",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.05,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _userResponded
+                              ? null
+                              : _handleUserNeedsHelp,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _userResponded
+                                ? Colors.grey
+                                : AppTheme.criticalRed,
+                            side: BorderSide(
+                              color: _userResponded
+                                  ? Colors.grey
+                                  : AppTheme.criticalRed,
+                              width: 2,
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'I NEED HELP',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  if (_secondsRemaining <= 10)
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryRed.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber,
+                            color: AppTheme.primaryRed,
+                            size: 16,
+                          ),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Emergency services will be contacted automatically if no response',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  const SizedBox(height: 8),
+                  // Debug/version watermark to confirm updated dialog is visible during testing
+                  const Text(
+                    'AI Voice Verification • v2025-11-09',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.white38,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RedPing</string>
+    
+    <!-- App Actions / Voice Assistant strings -->
+    <string name="safety_status">safety status</string>
+    <string name="sos_trigger">emergency SOS</string>
+    <string name="hazard_check">hazard alerts</string>
+    <string name="location_share">share location</string>
+    <string name="battery_check">battery level</string>
+</resources>

@@ -1,0 +1,4 @@
+{
+  "deprecated": true,
+  "_comment": "This root-level file is intentionally not used. The active Firebase config is at android/app/google-services.json."
+}

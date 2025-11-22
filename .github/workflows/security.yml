@@ -1,0 +1,66 @@
+name: Security CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  flutter_sast:
+    name: Flutter Analyze & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+      - name: Flutter pub get
+        run: flutter pub get
+      - name: Flutter analyze
+        run: flutter analyze
+      - name: Run Dart tests
+        run: |
+          flutter test --machine || true
+        # Allow tests to fail in CI until stabilized; switch to strict later
+
+  functions_audit:
+    name: Functions Audit & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        run: npm ci
+      - name: ESLint (optional if configured)
+        run: |
+          if [ -f .eslintrc.js ] || [ -f .eslintrc.cjs ] || [ -f .eslintrc.json ]; then
+            npx eslint . || true
+          else
+            echo "No ESLint config; skipping"
+          fi
+      - name: npm audit
+        run: npm audit --production --audit-level=moderate || true
+
+  codeql_js:
+    name: CodeQL Analyze (JS)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3

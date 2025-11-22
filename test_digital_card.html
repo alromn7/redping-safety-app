@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Card Link Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px 20px;
+            margin: 0;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .test-link {
+            display: block;
+            background: #dc2626;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            text-decoration: none;
+            margin: 15px 0;
+            text-align: center;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        .test-link:hover {
+            background: #b91c1c;
+        }
+        .info {
+            background: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .code {
+            background: #1e293b;
+            color: #10b981;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        .status {
+            padding: 10px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .status.pending {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+        }
+        .status.success {
+            background: #d1fae5;
+            border-left: 4px solid #10b981;
+        }
+        .status.error {
+            background: #fee2e2;
+            border-left: 4px solid #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚨 RedPing Digital Card Test</h1>
+        
+        <div class="info">
+            <strong>Test Instructions:</strong>
+            <ol>
+                <li>Click the test link below</li>
+                <li>It should open the emergency card with session details</li>
+                <li>Verify the "Open RedPing App" button is visible</li>
+                <li>Check that all emergency information displays correctly</li>
+            </ol>
+        </div>
+
+        <h2>Local Test Links:</h2>
+        
+        <a href="./web/emergency_card/card.html" class="test-link" target="_blank">
+            📱 Test Card (Direct Path)
+        </a>
+        
+        <a href="./web/emergency_card/card.html?sid=test_session_123" class="test-link" target="_blank">
+            🔗 Test Card with Query Param
+        </a>
+
+        <div class="status pending">
+            <strong>⚠️ Firebase Hosting Required:</strong>
+            <p>The URL path routing (e.g., /sos/session_id) only works after deploying to Firebase Hosting.</p>
+            <p>For local testing, use the direct paths above or deploy first.</p>
+        </div>
+
+        <h2>Production URLs (After Deployment):</h2>
+        
+        <div class="code">
+            https://redping.app/sos/test_session_123
+        </div>
+        
+        <div class="code">
+            https://redping.app/emergency
+        </div>
+
+        <h2>Expected SMS Format:</h2>
+        <div class="code">
+EMERGENCY - RedPing
+
+Name: Test User
+Phone: +1234567890
+Type: Manual SOS
+Time: 2:30 PM
+
+Location: 37.4219, -122.0840
+
+CALL: +1234567890
+IF NO ANSWER: Call emergency services immediately
+
+View full details:
+https://redping.app/sos/session_123
+
+Alert 1/5
+RedPing Emergency Response
+        </div>
+
+        <div class="info">
+            <strong>✅ What's Working:</strong>
+            <ul>
+                <li>SMS service uses digital card links</li>
+                <li>Card HTML has path parsing for /sos/&lt;sessionId&gt;</li>
+                <li>Firebase rewrites configured for /sos/* paths</li>
+            </ul>
+        </div>
+
+        <div class="status pending">
+            <strong>📋 Next Steps:</strong>
+            <ol>
+                <li>Test the direct links above to verify card display</li>
+                <li>Deploy to Firebase: <code>firebase deploy --only hosting</code></li>
+                <li>Test production URL: https://redping.app/sos/test_session_123</li>
+                <li>Trigger real SOS and check SMS link</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        // Auto-test card loading
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('Digital Card Test Page Loaded');
+            console.log('Current Path:', window.location.pathname);
+            console.log('Search Params:', window.location.search);
+        });
+    </script>
+</body>
+</html>

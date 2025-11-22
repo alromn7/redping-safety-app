@@ -1,0 +1,132 @@
+name: redping_14v
+description: "REDP!NG Safety Ecosystem - A comprehensive safety app with crash detection, SOS alerts, and community features."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI & Navigation
+  cupertino_icons: ^1.0.8
+  firebase_core: ^3.15.2
+  firebase_auth: ^5.3.3
+  cloud_firestore: ^5.4.4
+  firebase_database: ^11.0.2
+  firebase_crashlytics: ^4.1.3
+  google_sign_in: ^6.2.1
+  go_router: ^14.6.2
+  flutter_svg: ^2.0.10+1
+  
+  # State Management
+  flutter_riverpod: ^2.4.0
+  riverpod_annotation: ^2.3.0
+  
+  # Location & Maps
+  geolocator: ^10.1.0
+  url_launcher: ^6.2.1
+  location: ^6.0.0
+  geocoding: ^3.0.0
+  
+  # Sensors & Hardware
+  sensors_plus: ^6.1.0
+  device_info_plus: ^10.1.2
+  battery_plus: ^6.1.0
+  vibration: ^2.0.0
+  audioplayers: ^6.1.0
+  
+  # Communication & Networking
+  http: ^1.2.2
+  web_socket_channel: ^3.0.1
+  connectivity_plus: ^6.1.0
+  
+  # Storage & Database
+  sqflite: ^2.4.1
+  shared_preferences: ^2.3.3
+  path_provider: ^2.1.4
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  flutter_secure_storage: ^9.2.2
+  
+  # Security & Encryption
+  crypto: ^3.0.6
+  encrypt: ^5.0.3
+  
+  # Payment Processing
+  flutter_stripe: ^11.1.0
+  
+  # Media & Files
+  image_picker: ^1.1.2
+  signature: ^5.5.0
+  permission_handler: ^11.0.1
+  file_picker: ^8.1.2
+  
+  # Bluetooth & Device Scanning
+  flutter_blue_plus: ^1.32.4
+  mobile_scanner: ^5.0.0
+  
+  # AI & Speech Recognition
+  speech_to_text: ^7.0.0
+  flutter_tts: ^4.2.0
+  android_intent_plus: ^5.1.0
+  quick_actions: ^1.1.0
+  google_generative_ai: ^0.4.6
+  
+  # Push Notifications
+  firebase_messaging: ^15.2.10
+  flutter_local_notifications: ^18.0.1
+  cloud_functions: ^5.0.4
+  
+  # Utilities
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  json_annotation: ^4.9.0
+  equatable: ^2.0.7
+  logger: ^2.5.0
+  timeago: ^3.7.1
+  sign_in_button: ^4.0.1
+  firebase_app_check: ^0.3.2+10
+  share_plus: ^10.1.3
+
+dev_dependencies:
+  integration_test:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter
+  test: ^1.25.8
+
+  # Linting & Code Generation
+  flutter_lints: ^5.0.0
+  build_runner: ^2.4.13
+  json_serializable: ^6.8.0
+  riverpod_generator: ^2.4.0
+  hive_generator: ^2.0.0
+  
+  # Testing
+  mockito: ^5.4.4
+  
+  # App Icon Generator
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/sounds/
+    - assets/docs/
+    - assets/pins/
+
+# App Icon Configuration
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/images/REDP!NG.png"
+  adaptive_icon_background: "#1A1A1A"
+  adaptive_icon_foreground: "assets/images/REDP!NG.png"
+  remove_alpha_ios: true
+

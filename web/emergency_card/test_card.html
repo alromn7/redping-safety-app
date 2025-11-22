@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emergency Card Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #DC2626;
+            margin-top: 0;
+        }
+        .test-link {
+            display: block;
+            background: linear-gradient(135deg, #DC2626 0%, #991B1B 100%);
+            color: white;
+            padding: 16px 24px;
+            border-radius: 12px;
+            text-decoration: none;
+            text-align: center;
+            font-weight: 600;
+            margin: 20px 0;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .test-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(220, 38, 38, 0.4);
+        }
+        .info {
+            background: #f3f4f6;
+            padding: 16px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        code {
+            background: #1f2937;
+            color: #10b981;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚨 Emergency Card Test Page</h1>
+        
+        <div class="info">
+            <p><strong>This page demonstrates the digital emergency card with test data.</strong></p>
+            <p>Click the button below to see how emergency contacts will experience the card when they receive an SMS link.</p>
+        </div>
+
+        <a href="card.html?sid=test123&name=John%20Doe&phone=%2B61412345678&type=accident&loc=Sydney%20CBD%2C%20George%20St&coords=-33.8688,151.2093&map=https%3A%2F%2Fmaps.google.com%2F%3Fq%3D-33.8688%2C151.2093&track=redping%3A%2F%2Fsos%2Ftest123&time=2%3A45%20PM&alert=1&battery=85&speed=0&status=active" class="test-link">
+            📱 View Emergency Card (Accident)
+        </a>
+
+        <a href="card.html?sid=test456&name=Sarah%20Smith&phone=%2B61400123456&type=fall&loc=Melbourne%2C%20Collins%20St&coords=-37.8136,144.9631&map=https%3A%2F%2Fmaps.google.com%2F%3Fq%3D-37.8136%2C144.9631&track=redping%3A%2F%2Fsos%2Ftest456&time=9%3A15%20AM&alert=2&battery=42&speed=0&status=active" class="test-link">
+            📱 View Emergency Card (Fall Detection)
+        </a>
+
+        <a href="card.html?sid=test789&name=Mike%20Johnson&phone=%2B61411222333&type=manual&loc=Brisbane%2C%20Queen%20St&coords=-27.4698,153.0251&map=https%3A%2F%2Fmaps.google.com%2F%3Fq%3D-27.4698%2C153.0251&track=redping%3A%2F%2Fsos%2Ftest789&time=6%3A30%20PM&alert=3&battery=95&speed=12&status=active" class="test-link">
+            📱 View Emergency Card (Manual SOS)
+        </a>
+
+        <div class="info">
+            <h3>URL Parameters:</h3>
+            <ul style="font-size: 14px; line-height: 1.8;">
+                <li><code>sid</code> - Session ID</li>
+                <li><code>name</code> - User's full name</li>
+                <li><code>phone</code> - User's phone number</li>
+                <li><code>type</code> - Emergency type (accident/fall/medical/manual)</li>
+                <li><code>loc</code> - Location description</li>
+                <li><code>coords</code> - GPS coordinates (lat,lng)</li>
+                <li><code>map</code> - Google Maps link</li>
+                <li><code>track</code> - RedPing deep link</li>
+                <li><code>time</code> - Alert time</li>
+                <li><code>alert</code> - Alert number</li>
+                <li><code>battery</code> - Battery percentage</li>
+                <li><code>speed</code> - Speed in km/h</li>
+                <li><code>status</code> - Session status</li>
+            </ul>
+        </div>
+
+        <div class="info">
+            <h3>🎯 What to Test:</h3>
+            <ol style="line-height: 1.8;">
+                <li>✅ RedPing logo displays correctly</li>
+                <li>✅ All emergency information populates dynamically</li>
+                <li>✅ Action buttons are touch-friendly</li>
+                <li>✅ Colors match emergency type</li>
+                <li>✅ Animations work smoothly</li>
+                <li>✅ Responsive on mobile devices</li>
+                <li>✅ Status indicators pulse/glow correctly</li>
+            </ol>
+        </div>
+
+        <div class="info" style="background: #fef3c7; border-left: 4px solid #f59e0b;">
+            <h3 style="color: #92400e; margin-top: 0;">⚠️ Note:</h3>
+            <p style="color: #78350f; margin-bottom: 0;">
+                The "CALL NOW" button will only work on actual mobile devices with phone capabilities. 
+                The "View on Map" button will open Google Maps, and "Track Live" will attempt to open 
+                the RedPing app (if installed).
+            </p>
+        </div>
+    </div>
+</body>
+</html>

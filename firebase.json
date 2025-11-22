@@ -1,0 +1,74 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/emergency",
+        "destination": "/emergency_card/card.html"
+      },
+      {
+        "source": "/sos/*",
+        "destination": "/emergency_card/card.html"
+      },
+      {
+        "source": "/sos/**",
+        "destination": "/emergency_card/card.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(jpg|jpeg|gif|png|svg|webp)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "max-age=7200"
+          }
+        ]
+      }
+    ]
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "redping-a2e37",
+          "appId": "1:557287609270:android:ee97c332c47695a6832717",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "redping-a2e37",
+          "configurations": {
+            "android": "1:557287609270:android:ee97c332c47695a6832717",
+            "ios": "1:557287609270:ios:602b31ccfe961d72832717",
+            "macos": "1:557287609270:ios:602b31ccfe961d72832717",
+            "web": "1:557287609270:web:3bd44b87fdf7a324832717",
+            "windows": "1:557287609270:web:3776ed57820899ce832717"
+          }
+        }
+      }
+    }
+  }
+}

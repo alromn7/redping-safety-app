@@ -1,0 +1,227 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isSARMember() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['SAR_MEMBER', 'SAR_LEADER', 'ADMIN']);
+    }
+    
+    function isSARLeader() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['SAR_LEADER', 'ADMIN']);
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ADMIN', 'SUPER_ADMIN']);
+    }
+    
+    // Coordinators are SAR leaders or admins
+    function isCoordinator() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['SAR_LEADER', 'ADMIN']);
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId) || isAdmin();
+      
+      // User metadata subcollection (for state tracking like activeSessionId)
+      match /meta/{document=**} {
+        allow read: if isAuthenticated();
+        allow write: if isOwner(userId) || isAdmin();
+      }
+    }
+    
+    // SOS Sessions collection (primary source of truth)
+    // Note: Kept permissive read for all authenticated users to avoid breaking current flows.
+    // Gradually enforce stricter updates as subcollections (locations/events) are adopted.
+    match /sos_sessions/{sessionId} {
+      // Read: authenticated users can read; coordinators and owners will be further scoped in future tightening
+      allow read: if isAuthenticated();
+
+      // Create: only the authenticated owner can create their session
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+
+      // Update: owner or coordinator can update for now (field-level constraints to be added when client is ready)
+      allow update: if isAuthenticated() && (
+        request.auth.uid == resource.data.userId || isCoordinator()
+      );
+
+      // Delete: only admins can delete (for cleanup)
+      allow delete: if isAdmin();
+    }
+
+    // Subcollections for durability pattern
+    match /sos_sessions/{sessionId}/locations/{docId} {
+      // Owner can write pings; coordinators and owners can read
+      allow create: if isAuthenticated() &&
+        get(/databases/$(database)/documents/sos_sessions/$(sessionId)).data.userId == request.auth.uid;
+      allow read: if isAuthenticated();
+      allow update, delete: if false; // immutable pings; add admin cleanup if needed
+    }
+
+    match /sos_sessions/{sessionId}/events/{docId} {
+      // Coordinators write events (status changes, notes); all authenticated can read for transparency/logs
+      allow read: if isAuthenticated();
+      allow create: if isCoordinator();
+      allow update, delete: if false;
+    }
+    
+    // SOS Pings collection (regional coordination)
+    // PRODUCTION: Strict access control
+    match /sos_pings/{pingId} {
+      allow read: if isAuthenticated();
+      // Only owner can create their own ping
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Only owner or SAR coordinators can update
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isCoordinator()
+      );
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Regional pings (for SAR coordination)
+    // PRODUCTION: Strict access control
+    match /regional_pings/{region}/{pingId} {
+      allow read: if isAuthenticated();
+      // Only owner can create their own ping
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Only owner or SAR coordinators can update
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isCoordinator()
+      );
+      allow delete: if isAdmin();
+    }
+    
+    // SAR Teams collection
+    match /sar_teams/{teamId} {
+      // Public read for team discovery
+      allow read: if isAuthenticated();
+      
+      // Only SAR leaders can create teams
+      allow create: if isSARLeader();
+      
+      // Team members and leaders can update
+      allow update: if isAuthenticated() && (
+        isSARLeader() || 
+        request.auth.uid in resource.data.memberIds
+      );
+      
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // SAR Members collection
+    match /sar_members/{memberId} {
+      allow read: if isAuthenticated() && isSARMember();
+      allow write: if isSARLeader() || isAdmin();
+    }
+
+    // SAR Messages (PRODUCTION)
+    match /sar_messages/{messageId} {
+      // Only SAR members can read messages
+      allow read: if isAuthenticated() && isSARMember();
+      // Only SAR members can create messages
+      allow create: if isAuthenticated() && isSARMember() && 
+        request.resource.data.senderId == request.auth.uid;
+      // Sender can update their own message (for edits)
+      allow update: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+    
+    // Notifications collection
+    match /notifications/{notificationId} {
+      // Users can read their own notifications
+      allow read: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      
+      // System and SAR can create notifications
+      allow create: if isAuthenticated();
+      
+      // Users can mark their notifications as read
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt']);
+      
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+    
+    // Emergency Contacts collection
+    match /emergency_contacts/{contactId} {
+      allow read, write: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+    }
+    
+    // Chat/Messages collection
+    match /messages/{messageId} {
+      // Participants can read messages
+      allow read: if isAuthenticated() && 
+        (resource.data.senderId == request.auth.uid || 
+         resource.data.receiverId == request.auth.uid ||
+         isSARMember());
+      
+      // Authenticated users can send messages
+      allow create: if isAuthenticated() && 
+        request.resource.data.senderId == request.auth.uid;
+      
+      // No updates or deletes for message integrity
+      allow update, delete: if false;
+    }
+    
+    // Subscriptions collection
+    match /subscriptions/{subscriptionId} {
+      allow read: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      allow write: if isAdmin();
+    }
+    
+    // Analytics and logs (admin only)
+    match /analytics/{document=**} {
+      allow read, write: if isAdmin();
+    }
+    
+    match /logs/{document=**} {
+      allow read: if isAdmin();
+      allow write: if isAuthenticated(); // Allow logging
+    }
+
+    // Help Requests and Responses (PRODUCTION)
+    match /help_requests/{requestId} {
+      allow read: if isAuthenticated();
+      // Only authenticated users can create requests
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Only owner or SAR members can update
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isSARMember()
+      );
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+
+    match /help_responses/{responseId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && isSARMember();
+      allow delete: if isAdmin();
+    }
+    
+    // Default deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

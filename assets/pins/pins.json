@@ -1,0 +1,17 @@
+{
+  "hosts": {
+    "us-central1-redping-staging.cloudfunctions.net": {
+      "alg": "sha256-pem",
+      "fingerprints": [
+        "e1d7ef6738704a2eb60116270ad6a5d178eea6c62740c410291f5fd080999f51"
+      ]
+    },
+    "us-central1-redping-prod.cloudfunctions.net": {
+      "alg": "sha256-pem",
+      "fingerprints": [
+        "e1d7ef6738704a2eb60116270ad6a5d178eea6c62740c410291f5fd080999f51"
+      ]
+    }
+  },
+  "enforce": true
+}

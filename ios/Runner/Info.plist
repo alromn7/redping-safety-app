@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Redping 14v</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>redping_14v</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	
+	<!-- Google Maps API Key removed - using native maps -->
+	
+	<!-- Location permissions -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>RedPing needs location access to provide emergency services and track your safety.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>RedPing needs location access to provide emergency services and track your safety even when the app is in the background.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>RedPing needs location access to provide emergency services and track your safety even when the app is in the background.</string>
+	
+	<!-- Motion sensors permission -->
+	<key>NSMotionUsageDescription</key>
+	<string>RedPing uses motion sensors to detect crashes and falls for automatic emergency response.</string>
+	
+	<!-- Camera and photo permissions -->
+	<key>NSCameraUsageDescription</key>
+	<string>RedPing needs camera access to capture photos for incident reports and user profile pictures.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>RedPing needs photo library access to select images for reports and profile pictures.</string>
+	
+	<!-- Microphone permission -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>RedPing may use microphone for voice messages in emergency situations.</string>
+	
+	<!-- Contacts permission -->
+	<key>NSContactsUsageDescription</key>
+	<string>RedPing needs access to contacts to manage emergency contacts for safety notifications.</string>
+	
+	<!-- Bluetooth permission -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>RedPing uses Bluetooth to connect with safety devices and emergency beacons.</string>
+	
+	<!-- Calendar permission -->
+	<key>NSCalendarsUsageDescription</key>
+	<string>RedPing can schedule safety check-ins and activity reminders in your calendar.</string>
+	
+	<!-- Face ID / Touch ID permission -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>RedPing uses Face ID/Touch ID to secure access to sensitive emergency information.</string>
+	
+	<!-- Local network permission -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>RedPing needs local network access to communicate with nearby safety devices and emergency responders.</string>
+	
+	<!-- Satellite communication permissions -->
+	<key>NSEmergencySOSUsageDescription</key>
+	<string>RedPing needs access to Emergency SOS via satellite for emergency communication when cellular service is unavailable.</string>
+	<key>NSSatelliteCommunicationUsageDescription</key>
+	<string>RedPing uses satellite communication to send emergency alerts and location updates when cellular and WiFi are unavailable.</string>
+	
+	<!-- AI and Speech Recognition permissions -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>RedPing uses speech recognition to enable voice commands and AI-powered safety assistance for hands-free emergency response.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>RedPing integrates with Siri to provide quick access to emergency features and AI safety assistant through voice commands.</string>
+	
+	<!-- AI Assistant System Integration -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.redping.redping.emergency</string>
+		<string>com.redping.redping.ai-assistant</string>
+		<string>com.redping.redping.safety-check</string>
+	</array>
+	
+	<!-- Background AI Processing -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+		<string>processing</string>
+		<string>audio</string>
+	</array>
+	
+</dict>
+</plist>

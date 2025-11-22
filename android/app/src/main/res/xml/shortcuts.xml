@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- RedPing safety voice shortcuts for Google Assistant -->
+    <capability android:name="actions.intent.GET_THING">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity">
+            <extra android:name="hasThing.name" android:value="@string/safety_status"/>
+            <url-template android:value="redping://command/status"/>
+        </intent>
+    </capability>
+
+    <capability android:name="actions.intent.START_EXERCISE">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity">
+            <extra android:name="exercise.name" android:value="@string/sos_trigger"/>
+            <url-template android:value="redping://command/sos"/>
+        </intent>
+    </capability>
+
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity">
+            <extra android:name="feature.name" android:value="@string/hazard_check"/>
+            <url-template android:value="redping://command/hazards"/>
+        </intent>
+    </capability>
+
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity">
+            <extra android:name="feature.name" android:value="@string/location_share"/>
+            <url-template android:value="redping://command/location"/>
+        </intent>
+    </capability>
+
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity">
+            <extra android:name="feature.name" android:value="@string/battery_check"/>
+            <url-template android:value="redping://command/battery"/>
+        </intent>
+    </capability>
+</shortcuts>

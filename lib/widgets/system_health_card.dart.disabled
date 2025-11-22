@@ -1,0 +1,697 @@
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import '../core/theme/app_theme.dart';
+import '../services/app_service_manager.dart';
+import 'satellite_status_widget.dart';
+
+/// Widget showing system health and functionality status
+class SystemHealthCard extends StatefulWidget {
+  const SystemHealthCard({super.key});
+
+  @override
+  State<SystemHealthCard> createState() => _SystemHealthCardState();
+}
+
+class _SystemHealthCardState extends State<SystemHealthCard> {
+  final AppServiceManager _serviceManager = AppServiceManager();
+
+  double _readinessScore = 0.0;
+  Map<String, dynamic> _appStatus = {};
+  DateTime? _lastUpdate;
+  static const Duration _updateThrottle = Duration(seconds: 2);
+
+  @override
+  void initState() {
+    super.initState();
+    _updateStatus();
+    _setupServiceCallbacks();
+  }
+
+  void _setupServiceCallbacks() {
+    // Set up callbacks to refresh status when services change
+    _serviceManager.profileService.setProfileUpdatedCallback((_) {
+      _updateStatus();
+    });
+  }
+
+  void _updateStatus() {
+    final now = DateTime.now();
+
+    // Throttle updates to prevent excessive rebuilds
+    if (_lastUpdate != null && now.difference(_lastUpdate!) < _updateThrottle) {
+      return;
+    }
+
+    _lastUpdate = now;
+
+    if (mounted) {
+      setState(() {
+        _readinessScore = _serviceManager.getEmergencyReadinessScore();
+        _appStatus = _serviceManager.getAppStatus();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Trigger throttled update
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateStatus());
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.health_and_safety,
+                  color: AppTheme.primaryRed,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'System Health',
+                  style: TextStyle(
+                    color: AppTheme.primaryText,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                _buildHealthBadge(_readinessScore),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Feature Status Grid
+            _buildFeatureStatus(_appStatus),
+
+            const SizedBox(height: 12),
+
+            // Additional Controls Section
+            if (_readinessScore > 0.5) _buildDetailedControls(),
+
+            const SizedBox(height: 8),
+
+            // Satellite communication status
+            SatelliteStatusWidget(
+              satelliteService: _serviceManager.satelliteService,
+              showDetails: true,
+            ),
+
+            const SizedBox(height: 8),
+
+            // Quick Actions
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _serviceManager.triggerFullSystemTest(),
+                    icon: const Icon(Icons.play_arrow, size: 14),
+                    label: const Text('Test', style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.infoBlue,
+                      side: const BorderSide(color: AppTheme.infoBlue),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
+                      minimumSize: const Size(0, 36),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => context.go('/settings'),
+                    icon: const Icon(Icons.tune, size: 14),
+                    label: const Text(
+                      'Settings',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.warningOrange,
+                      side: const BorderSide(color: AppTheme.warningOrange),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
+                      minimumSize: const Size(0, 36),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHealthBadge(double score) {
+    final percentage = (score * 100).toInt();
+    Color color;
+    String status;
+
+    if (score >= 0.9) {
+      color = AppTheme.safeGreen;
+      status = 'EXCELLENT';
+    } else if (score >= 0.7) {
+      color = AppTheme.infoBlue;
+      status = 'GOOD';
+    } else if (score >= 0.5) {
+      color = AppTheme.warningOrange;
+      status = 'NEEDS SETUP';
+    } else {
+      color = AppTheme.criticalRed;
+      status = 'INCOMPLETE';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(
+            '$percentage%',
+            style: TextStyle(
+              color: color,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            status,
+            style: TextStyle(
+              color: color,
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeatureStatus(Map<String, dynamic> appStatus) {
+    final services = appStatus['services'] as Map<String, dynamic>? ?? {};
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _buildFeatureItem(
+                '🚨',
+                'SOS System',
+                _getSOSStatus(services),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildFeatureItem(
+                '📡',
+                'Sensors',
+                _getSensorStatus(services),
+                onToggle: _toggleSensorMonitoring,
+                isToggleable: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: _buildFeatureItem(
+                '📍',
+                'GPS',
+                _getLocationStatus(services),
+                onToggle: _toggleLocationService,
+                isToggleable: true,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildFeatureItem(
+                '👥',
+                'Contacts',
+                _getContactsStatus(services),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: _buildFeatureItem(
+                '🔔',
+                'Alerts',
+                _getNotificationStatus(services),
+                onToggle: _toggleNotifications,
+                isToggleable: true,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildFeatureItem(
+                '👤',
+                'Profile',
+                _getProfileStatus(services),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFeatureItem(
+    String emoji,
+    String label,
+    FeatureStatus status, {
+    VoidCallback? onToggle,
+    bool? isToggleable,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: AppTheme.darkSurface,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: _getStatusColor(status).withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppTheme.primaryText,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                Text(
+                  _getStatusText(status),
+                  style: TextStyle(
+                    color: _getStatusColor(status),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isToggleable == true && onToggle != null) ...[
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: onToggle,
+              child: Container(
+                width: 24,
+                height: 14,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(7),
+                  color: _getToggleColor(status, label)
+                      ? AppTheme.safeGreen
+                      : AppTheme.neutralGray.withOpacity(0.3),
+                ),
+                child: AnimatedAlign(
+                  duration: const Duration(milliseconds: 200),
+                  alignment: _getToggleColor(status, label)
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    margin: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ] else ...[
+            Container(
+              width: 5,
+              height: 5,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _getStatusColor(status),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  FeatureStatus _getSOSStatus(Map<String, dynamic> services) {
+    final sosStatus = services['sos'] as Map<String, dynamic>? ?? {};
+    final isInitialized = sosStatus['isInitialized'] ?? false;
+    return isInitialized ? FeatureStatus.active : FeatureStatus.error;
+  }
+
+  FeatureStatus _getSensorStatus(Map<String, dynamic> services) {
+    final sensorStatus = services['sensor'] as Map<String, dynamic>? ?? {};
+    final isMonitoring = sensorStatus['isMonitoring'] ?? false;
+    return isMonitoring ? FeatureStatus.active : FeatureStatus.error;
+  }
+
+  FeatureStatus _getLocationStatus(Map<String, dynamic> services) {
+    final locationStatus = services['location'] as Map<String, dynamic>? ?? {};
+    final hasPermission = locationStatus['hasPermission'] ?? false;
+    final isTracking = _serviceManager.locationService.isTracking;
+
+    if (hasPermission && isTracking) {
+      return FeatureStatus.active;
+    } else if (hasPermission) {
+      return FeatureStatus.warning;
+    } else {
+      return FeatureStatus.error;
+    }
+  }
+
+  FeatureStatus _getContactsStatus(Map<String, dynamic> services) {
+    final contactsStatus = services['contacts'] as Map<String, dynamic>? ?? {};
+    final enabledContacts = contactsStatus['enabledContacts'] ?? 0;
+    if (enabledContacts >= 1) return FeatureStatus.active;
+    return FeatureStatus.warning;
+  }
+
+  FeatureStatus _getNotificationStatus(Map<String, dynamic> services) {
+    final notificationStatus =
+        services['notifications'] as Map<String, dynamic>? ?? {};
+    final isInitialized = notificationStatus['isInitialized'] ?? false;
+    final isEnabled = _serviceManager.notificationService.isEnabled;
+
+    if (isInitialized && isEnabled) {
+      return FeatureStatus.active;
+    } else if (isInitialized && !isEnabled) {
+      return FeatureStatus.warning; // Initialized but disabled by user
+    } else {
+      return FeatureStatus.error; // Not initialized
+    }
+  }
+
+  FeatureStatus _getProfileStatus(Map<String, dynamic> services) {
+    final profileStatus = services['profile'] as Map<String, dynamic>? ?? {};
+    final emergencyReady = profileStatus['emergencyReady'] ?? false;
+    final completeness = profileStatus['completeness'] ?? 0.0;
+
+    if (emergencyReady) return FeatureStatus.active;
+    if (completeness > 0.3) return FeatureStatus.warning;
+    return FeatureStatus.error;
+  }
+
+  Color _getStatusColor(FeatureStatus status) {
+    switch (status) {
+      case FeatureStatus.active:
+        return AppTheme.safeGreen;
+      case FeatureStatus.warning:
+        return AppTheme.warningOrange;
+      case FeatureStatus.error:
+        return AppTheme.criticalRed;
+    }
+  }
+
+  String _getStatusText(FeatureStatus status) {
+    switch (status) {
+      case FeatureStatus.active:
+        return 'ACTIVE';
+      case FeatureStatus.warning:
+        return 'SETUP';
+      case FeatureStatus.error:
+        return 'ERROR';
+    }
+  }
+
+  bool _getToggleColor(FeatureStatus status, String label) {
+    // Special logic for notifications - check if enabled
+    if (label == 'Alerts') {
+      return _serviceManager.notificationService.isEnabled;
+    }
+    // Special logic for sensors - check if monitoring
+    if (label == 'Sensors') {
+      return _serviceManager.sensorService.isMonitoring;
+    }
+    // Special logic for GPS - check if tracking
+    if (label == 'GPS') {
+      return _serviceManager.locationService.isTracking;
+    }
+    // Default behavior
+    return status == FeatureStatus.active;
+  }
+
+  // Toggle functionality methods
+  void _toggleSensorMonitoring() async {
+    try {
+      if (_serviceManager.sensorService.isMonitoring) {
+        _serviceManager.sensorService.stopMonitoring();
+        await _updateUserPreferences(sensorMonitoringEnabled: false);
+        _showToggleMessage('Sensor monitoring disabled');
+      } else {
+        _serviceManager.sensorService.startMonitoring();
+        await _updateUserPreferences(sensorMonitoringEnabled: true);
+        _showToggleMessage('Sensor monitoring enabled');
+      }
+      _updateStatus();
+    } catch (e) {
+      _showToggleMessage('Failed to toggle sensors: $e');
+    }
+  }
+
+  void _toggleLocationService() async {
+    try {
+      if (_serviceManager.locationService.isTracking) {
+        _serviceManager.locationService.stopTracking();
+        _showToggleMessage('Location tracking disabled');
+      } else {
+        final hasPermission = await _serviceManager.locationService
+            .initialize();
+        if (hasPermission) {
+          await _serviceManager.locationService.startTracking();
+          _showToggleMessage('Location tracking enabled');
+        } else {
+          _showToggleMessage(
+            'Location permission denied. Please enable in settings.',
+          );
+        }
+      }
+      _updateStatus();
+    } catch (e) {
+      _showToggleMessage('Failed to toggle location: $e');
+    }
+  }
+
+  void _toggleNotifications() async {
+    try {
+      // Toggle notification service enable/disable state
+      final currentlyEnabled = _serviceManager.notificationService.isEnabled;
+      _serviceManager.notificationService.isEnabled = !currentlyEnabled;
+
+      await _updateUserPreferences(notificationsEnabled: !currentlyEnabled);
+
+      _showToggleMessage(
+        'Notifications ${!currentlyEnabled ? "enabled" : "disabled"}',
+      );
+      _updateStatus();
+    } catch (e) {
+      _showToggleMessage('Failed to toggle notifications: $e');
+    }
+  }
+
+  Widget _buildDetailedControls() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.darkSurface.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: AppTheme.neutralGray.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Detection Settings',
+            style: TextStyle(
+              color: AppTheme.primaryText,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _buildDetailedToggle(
+            'Crash Detection',
+            Icons.car_crash,
+            _serviceManager.sensorService.crashDetectionEnabled,
+            _toggleCrashDetection,
+          ),
+          const SizedBox(height: 6),
+          _buildDetailedToggle(
+            'Fall Detection',
+            Icons.accessibility_new,
+            _serviceManager.sensorService.fallDetectionEnabled,
+            _toggleFallDetection,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailedToggle(
+    String label,
+    IconData icon,
+    bool isEnabled,
+    VoidCallback onToggle,
+  ) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: AppTheme.secondaryText),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(color: AppTheme.primaryText, fontSize: 11),
+          ),
+        ),
+        GestureDetector(
+          onTap: onToggle,
+          child: Container(
+            width: 32,
+            height: 18,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(9),
+              color: isEnabled
+                  ? AppTheme.safeGreen
+                  : AppTheme.neutralGray.withOpacity(0.3),
+            ),
+            child: AnimatedAlign(
+              duration: const Duration(milliseconds: 200),
+              alignment: isEnabled
+                  ? Alignment.centerRight
+                  : Alignment.centerLeft,
+              child: Container(
+                width: 14,
+                height: 14,
+                margin: const EdgeInsets.all(2),
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _toggleCrashDetection() async {
+    try {
+      final newState = !_serviceManager.sensorService.crashDetectionEnabled;
+      _serviceManager.sensorService.crashDetectionEnabled = newState;
+
+      await _updateUserPreferences(crashDetectionEnabled: newState);
+
+      _showToggleMessage(
+        'Crash detection ${newState ? "enabled" : "disabled"}',
+      );
+      _updateStatus();
+    } catch (e) {
+      _showToggleMessage('Failed to toggle crash detection: $e');
+    }
+  }
+
+  void _toggleFallDetection() async {
+    try {
+      final newState = !_serviceManager.sensorService.fallDetectionEnabled;
+      _serviceManager.sensorService.fallDetectionEnabled = newState;
+
+      await _updateUserPreferences(fallDetectionEnabled: newState);
+
+      _showToggleMessage('Fall detection ${newState ? "enabled" : "disabled"}');
+      _updateStatus();
+    } catch (e) {
+      _showToggleMessage('Failed to toggle fall detection: $e');
+    }
+  }
+
+  /// Update user preferences and save to profile
+  Future<void> _updateUserPreferences({
+    bool? sensorMonitoringEnabled,
+    bool? crashDetectionEnabled,
+    bool? fallDetectionEnabled,
+    bool? notificationsEnabled,
+  }) async {
+    try {
+      final currentProfile = _serviceManager.profileService.currentProfile;
+      if (currentProfile == null) return;
+
+      final currentPreferences = currentProfile.preferences;
+
+      // Update notification settings if needed (notifications handled by service directly)
+      if (notificationsEnabled != null) {
+        // Save notification state to SharedPreferences through the service
+        _serviceManager.notificationService.isEnabled = notificationsEnabled;
+      }
+
+      final updatedPreferences = currentPreferences.copyWith(
+        crashDetectionEnabled:
+            crashDetectionEnabled ?? currentPreferences.crashDetectionEnabled,
+        fallDetectionEnabled:
+            fallDetectionEnabled ?? currentPreferences.fallDetectionEnabled,
+      );
+
+      await _serviceManager.profileService.updatePreferences(
+        updatedPreferences,
+      );
+      debugPrint('SystemHealthCard: User preferences updated');
+    } catch (e) {
+      debugPrint('SystemHealthCard: Error updating preferences - $e');
+    }
+  }
+
+  void _showToggleMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        backgroundColor: AppTheme.darkSurface,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+}
+
+enum FeatureStatus {
+  active, // Working properly
+  warning, // Needs attention
+  error, // Not working
+}

@@ -1,0 +1,992 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/help_request.dart';
+import '../models/sos_session.dart' as sos; // For LocationInfo
+import '../models/user_profile.dart' as user_profile;
+import '../models/chat_message.dart' as chat;
+import 'notification_service.dart';
+import 'user_profile_service.dart';
+import 'location_service.dart';
+import 'chat_service.dart';
+
+/// Service for managing non-emergency help requests and assistance
+class HelpAssistantService {
+  static final HelpAssistantService _instance =
+      HelpAssistantService._internal();
+  factory HelpAssistantService() => _instance;
+  HelpAssistantService._internal();
+
+  final NotificationService _notificationService = NotificationService();
+  final UserProfileService _userProfileService = UserProfileService();
+  final LocationService _locationService = LocationService();
+  final ChatService _chatService = ChatService();
+
+  bool _isInitialized = false;
+
+  // Active help requests
+  final List<HelpRequest> _helpRequests = [];
+
+  // Available service providers (simulated for demo)
+  final Map<ServiceProviderType, List<ServiceProvider>> _serviceProviders = {
+    ServiceProviderType.towService: [
+      ServiceProvider(
+        id: 'tow_01',
+        name: 'City Towing Service',
+        type: ServiceProviderType.towService,
+        rating: 4.5,
+        averageResponseTime: 25,
+        isAvailable: true,
+        phoneNumber: '(555) 123-4567',
+        serviceArea: 'City Wide',
+        specialties: ['Heavy Duty Towing', '24/7 Service'],
+      ),
+      ServiceProvider(
+        id: 'tow_02',
+        name: 'Quick Tow Express',
+        type: ServiceProviderType.towService,
+        rating: 4.2,
+        averageResponseTime: 15,
+        isAvailable: true,
+        phoneNumber: '(555) 987-6543',
+        serviceArea: 'Downtown Area',
+        specialties: ['Fast Response', 'Motorcycle Towing'],
+      ),
+    ],
+    ServiceProviderType.mechanic: [
+      ServiceProvider(
+        id: 'mech_01',
+        name: 'Mobile Mechanic Pro',
+        type: ServiceProviderType.mechanic,
+        rating: 4.8,
+        averageResponseTime: 45,
+        isAvailable: true,
+        phoneNumber: '(555) 246-8135',
+        serviceArea: 'Metro Area',
+        specialties: ['Mobile Service', 'All Makes & Models'],
+      ),
+      ServiceProvider(
+        id: 'mech_02',
+        name: 'AutoFix Emergency',
+        type: ServiceProviderType.mechanic,
+        rating: 4.3,
+        averageResponseTime: 60,
+        isAvailable: true,
+        phoneNumber: '(555) 369-2580',
+        serviceArea: 'City Wide',
+        specialties: ['Emergency Repairs', 'Electrical Issues'],
+      ),
+    ],
+    ServiceProviderType.roadsideAssistance: [
+      ServiceProvider(
+        id: 'road_01',
+        name: 'AAA Roadside',
+        type: ServiceProviderType.roadsideAssistance,
+        rating: 4.6,
+        averageResponseTime: 30,
+        isAvailable: true,
+        phoneNumber: '(555) 123-AAA1',
+        serviceArea: 'Regional',
+        specialties: ['Jump Start', 'Tire Change', 'Lockout Service'],
+      ),
+    ],
+    ServiceProviderType.locksmith: [
+      ServiceProvider(
+        id: 'lock_01',
+        name: '24/7 Locksmith',
+        type: ServiceProviderType.locksmith,
+        rating: 4.4,
+        averageResponseTime: 20,
+        isAvailable: true,
+        phoneNumber: '(555) 456-LOCK',
+        serviceArea: 'City Wide',
+        specialties: ['Emergency Lockout', 'Key Replacement', 'Security Locks'],
+      ),
+    ],
+    ServiceProviderType.securityService: [
+      ServiceProvider(
+        id: 'sec_01',
+        name: 'Guardian Security',
+        type: ServiceProviderType.securityService,
+        rating: 4.7,
+        averageResponseTime: 15,
+        isAvailable: true,
+        phoneNumber: '(555) 789-SAFE',
+        serviceArea: 'Metro Area',
+        specialties: ['Home Security', 'Personal Protection', 'Surveillance'],
+      ),
+    ],
+    ServiceProviderType.animalControl: [
+      ServiceProvider(
+        id: 'animal_01',
+        name: 'City Animal Services',
+        type: ServiceProviderType.animalControl,
+        rating: 4.1,
+        averageResponseTime: 60,
+        isAvailable: true,
+        phoneNumber: '(555) PET-HELP',
+        serviceArea: 'City Wide',
+        specialties: ['Lost Pet Recovery', 'Animal Rescue', 'Wildlife Removal'],
+      ),
+    ],
+    ServiceProviderType.marineAssistance: [
+      ServiceProvider(
+        id: 'marine_01',
+        name: 'Harbor Patrol',
+        type: ServiceProviderType.marineAssistance,
+        rating: 4.5,
+        averageResponseTime: 20,
+        isAvailable: true,
+        phoneNumber: '(555) BOAT-911',
+        serviceArea: 'Waterways',
+        specialties: ['Boat Towing', 'Engine Repair', 'Fuel Delivery'],
+      ),
+    ],
+    ServiceProviderType.socialServices: [
+      ServiceProvider(
+        id: 'social_01',
+        name: 'Crisis Support Center',
+        type: ServiceProviderType.socialServices,
+        rating: 4.9,
+        averageResponseTime: 10,
+        isAvailable: true,
+        phoneNumber: '(555) CRISIS-1',
+        serviceArea: 'Regional',
+        specialties: [
+          'Domestic Violence Support',
+          'Crisis Counseling',
+          'Safe Housing',
+        ],
+      ),
+    ],
+  };
+
+  // Callbacks
+  Function(HelpRequest)? _onRequestCreated;
+  Function(HelpRequest)? _onRequestUpdated;
+  Function(ServiceProviderResponse)? _onProviderResponse;
+
+  /// Initialize the service
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+
+    try {
+      await _loadHelpRequests();
+
+      _isInitialized = true;
+      debugPrint('HelpAssistantService: Initialized successfully');
+    } catch (e) {
+      debugPrint('HelpAssistantService: Initialization error - $e');
+      throw Exception('Failed to initialize help assistant service: $e');
+    }
+  }
+
+  /// Create a new help request
+  Future<HelpRequest> createHelpRequest({
+    required HelpCategory category,
+    required HelpSubcategory subcategory,
+    required String title,
+    required String description,
+    required HelpPriority priority,
+    required ContactPreference contactPreference,
+    List<String> tags = const [],
+    List<HelpMediaAttachment> attachments = const [],
+  }) async {
+    final userProfile = _userProfileService.currentProfile;
+    if (userProfile == null) {
+      throw Exception('User profile required to create help request');
+    }
+
+    // Get current location if available
+    final location = await _locationService.getCurrentLocation();
+
+    final request = HelpRequest(
+      id: _generateRequestId(),
+      userId: userProfile.id,
+      category: category,
+      subcategory: subcategory,
+      title: title,
+      description: description,
+      priority: priority,
+      status: HelpStatus.pending,
+      createdAt: DateTime.now(),
+      location: location,
+      tags: tags,
+      attachments: attachments,
+      responses: [],
+      contactPreference: contactPreference,
+    );
+
+    _helpRequests.add(request);
+    await _saveHelpRequests();
+
+    // Send to appropriate service providers
+    await _dispatchToServiceProviders(request);
+
+    // Notify user
+    await _notificationService.showNotification(
+      title: '🤝 Help Request Sent',
+      body:
+          'Your request for "${request.title}" has been sent to available service providers.',
+      importance: NotificationImportance.defaultImportance,
+    );
+
+    _onRequestCreated?.call(request);
+    debugPrint('HelpAssistantService: Help request created - ${request.id}');
+
+    return request;
+  }
+
+  /// Update help request status
+  Future<HelpRequest> updateRequestStatus(
+    String requestId,
+    HelpStatus newStatus, {
+    String? updateMessage,
+  }) async {
+    final index = _helpRequests.indexWhere((r) => r.id == requestId);
+    if (index == -1) {
+      throw Exception('Help request not found');
+    }
+
+    final updatedRequest = _helpRequests[index].copyWith(
+      status: newStatus,
+      updatedAt: DateTime.now(),
+      resolvedAt: newStatus == HelpStatus.resolved ? DateTime.now() : null,
+    );
+
+    _helpRequests[index] = updatedRequest;
+    await _saveHelpRequests();
+
+    // Notify user of status change
+    await _notifyStatusChange(updatedRequest, updateMessage);
+
+    _onRequestUpdated?.call(updatedRequest);
+    return updatedRequest;
+  }
+
+  /// Add service provider response
+  Future<void> addServiceProviderResponse(
+    String requestId,
+    ServiceProviderResponse response,
+  ) async {
+    final index = _helpRequests.indexWhere((r) => r.id == requestId);
+    if (index == -1) return;
+
+    final request = _helpRequests[index];
+    final updatedResponses = List<ServiceProviderResponse>.from(
+      request.responses,
+    );
+
+    final existingIndex = updatedResponses.indexWhere(
+      (r) => r.providerId == response.providerId,
+    );
+
+    if (existingIndex >= 0) {
+      updatedResponses[existingIndex] = response;
+    } else {
+      updatedResponses.add(response);
+    }
+
+    final updatedRequest = request.copyWith(
+      responses: updatedResponses,
+      status: response.status == sos.ResponseStatus.acknowledged
+          ? HelpStatus.acknowledged
+          : request.status,
+      updatedAt: DateTime.now(),
+    );
+
+    _helpRequests[index] = updatedRequest;
+    await _saveHelpRequests();
+
+    // Notify user of provider response
+    await _notifyProviderResponse(updatedRequest, response);
+
+    _onProviderResponse?.call(response);
+  }
+
+  /// Dispatch request to appropriate service providers
+  Future<void> _dispatchToServiceProviders(HelpRequest request) async {
+    final appropriateProviders = _getAppropriateProviders(request);
+
+    // Also include emergency contacts if user allows
+    if (request.contactPreference.allowPhone ||
+        request.contactPreference.allowSMS) {
+      await _notifyEmergencyContacts(request);
+    }
+
+    // Simulate service provider responses
+    for (final provider in appropriateProviders) {
+      _simulateProviderResponse(request, provider);
+    }
+
+    // Send to community chat if appropriate
+    if (_shouldNotifyCommunity(request)) {
+      await _sendCommunityHelpRequest(request);
+    }
+  }
+
+  /// Get appropriate service providers for a help request
+  List<ServiceProvider> _getAppropriateProviders(HelpRequest request) {
+    final providers = <ServiceProvider>[];
+
+    switch (request.category) {
+      case HelpCategory.vehicle:
+        if (request.subcategory == HelpSubcategory.towing) {
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.towService] ?? [],
+          );
+        } else if (request.subcategory == HelpSubcategory.lockedOut) {
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.locksmith] ?? [],
+          );
+        } else {
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.roadsideAssistance] ?? [],
+          );
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.mechanic] ?? [],
+          );
+        }
+        break;
+
+      case HelpCategory.homeSecurity:
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.securityService] ?? [],
+        );
+        if (request.subcategory == HelpSubcategory.domesticViolence ||
+            request.subcategory == HelpSubcategory.breakIn) {
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.policeNonEmergency] ?? [],
+          );
+        }
+        break;
+
+      case HelpCategory.personalSafety:
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.securityService] ?? [],
+        );
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.policeNonEmergency] ?? [],
+        );
+        if (request.subcategory == HelpSubcategory.domesticViolence) {
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.socialServices] ?? [],
+          );
+        }
+        break;
+
+      case HelpCategory.lostFound:
+        if (request.subcategory == HelpSubcategory.lostPet) {
+          providers.addAll(
+            _serviceProviders[ServiceProviderType.animalControl] ?? [],
+          );
+        }
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.communityVolunteer] ?? [],
+        );
+        break;
+
+      case HelpCategory.marine:
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.marineAssistance] ?? [],
+        );
+        break;
+
+      case HelpCategory.legal:
+        providers.addAll(_serviceProviders[ServiceProviderType.legalAid] ?? []);
+        break;
+
+      case HelpCategory.utilities:
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.utilityCompany] ?? [],
+        );
+        break;
+
+      default:
+        providers.addAll(
+          _serviceProviders[ServiceProviderType.communityVolunteer] ?? [],
+        );
+    }
+
+    return providers.where((p) => p.isAvailable).toList();
+  }
+
+  /// Simulate service provider response
+  void _simulateProviderResponse(
+    HelpRequest request,
+    ServiceProvider provider,
+  ) {
+    // Random response delay (30 seconds to 10 minutes)
+    final delaySeconds = Random().nextInt(570) + 30;
+
+    Timer(Duration(seconds: delaySeconds), () async {
+      final response = ServiceProviderResponse(
+        id: _generateId(),
+        providerId: provider.id,
+        providerName: provider.name,
+        providerType: provider.type,
+        status: _getRandomResponseStatus(),
+        responseTime: DateTime.now(),
+        estimatedArrival: DateTime.now().add(
+          Duration(
+            minutes: provider.averageResponseTime + Random().nextInt(15),
+          ),
+        ),
+        message: _generateProviderMessage(provider.type, request.subcategory),
+        estimatedCost: _generateEstimatedCost(
+          provider.type,
+          request.subcategory,
+        ),
+        serviceDetails: _generateServiceDetails(provider.type),
+      );
+
+      await addServiceProviderResponse(request.id, response);
+    });
+  }
+
+  /// Generate provider response message
+  String _generateProviderMessage(
+    ServiceProviderType type,
+    HelpSubcategory subcategory,
+  ) {
+    final messages = <String, List<String>>{
+      '${ServiceProviderType.towService}': [
+        'We can tow your vehicle to the nearest service station.',
+        'Our tow truck is available and can assist you shortly.',
+        'We provide safe and reliable towing services.',
+      ],
+      '${ServiceProviderType.mechanic}': [
+        'I can come to your location and diagnose the issue.',
+        'Mobile mechanic service available. I\'ll bring tools and parts.',
+        'I can help with most common vehicle problems on-site.',
+      ],
+      '${ServiceProviderType.roadsideAssistance}': [
+        'We can help with jump start, tire change, or fuel delivery.',
+        'Our roadside assistance team is standing by.',
+        'We provide comprehensive roadside support services.',
+      ],
+      '${ServiceProviderType.locksmith}': [
+        'I can unlock your vehicle without damage.',
+        'Professional locksmith service available 24/7.',
+        'I can help you regain access to your vehicle safely.',
+      ],
+      '${ServiceProviderType.securityService}': [
+        'Our security team can respond to your location.',
+        'We provide professional security assistance.',
+        'Our trained security personnel are available to help.',
+      ],
+      '${ServiceProviderType.animalControl}': [
+        'We can help locate your lost pet.',
+        'Our team specializes in pet recovery services.',
+        'We have experience with lost animal cases.',
+      ],
+    };
+
+    final typeMessages =
+        messages['$type'] ?? ['We can assist you with your request.'];
+    return typeMessages[Random().nextInt(typeMessages.length)];
+  }
+
+  /// Generate estimated cost
+  double? _generateEstimatedCost(
+    ServiceProviderType type,
+    HelpSubcategory subcategory,
+  ) {
+    final baseCosts = <ServiceProviderType, double>{
+      ServiceProviderType.towService: 120.0,
+      ServiceProviderType.mechanic: 150.0,
+      ServiceProviderType.roadsideAssistance: 80.0,
+      ServiceProviderType.locksmith: 100.0,
+      ServiceProviderType.securityService: 200.0,
+      ServiceProviderType.marineAssistance: 250.0,
+    };
+
+    final baseCost = baseCosts[type];
+    if (baseCost == null) return null;
+
+    // Add random variation (±30%)
+    final variation = (Random().nextDouble() - 0.5) * 0.6;
+    return baseCost * (1 + variation);
+  }
+
+  /// Generate service details
+  Map<String, dynamic> _generateServiceDetails(ServiceProviderType type) {
+    switch (type) {
+      case ServiceProviderType.towService:
+        return {
+          'vehicle_capacity': 'Up to 10,000 lbs',
+          'equipment': ['Flatbed', 'Wheel Lift', 'Winch'],
+          'insurance': 'Fully Insured',
+        };
+      case ServiceProviderType.mechanic:
+        return {
+          'certifications': ['ASE Certified', 'Mobile Service'],
+          'tools': 'Complete mobile workshop',
+          'warranty': '30-day parts warranty',
+        };
+      case ServiceProviderType.securityService:
+        return {
+          'personnel': 'Licensed security officers',
+          'response_type': 'Armed/Unarmed available',
+          'equipment': 'Radio communication, patrol vehicle',
+        };
+      default:
+        return {};
+    }
+  }
+
+  /// Get random response status (weighted toward positive responses)
+  sos.ResponseStatus _getRandomResponseStatus() {
+    final random = Random().nextDouble();
+    if (random < 0.7) {
+      return sos.ResponseStatus.acknowledged;
+    } else if (random < 0.9) {
+      return sos.ResponseStatus.enRoute;
+    } else {
+      return sos.ResponseStatus.unableToRespond;
+    }
+  }
+
+  /// Notify emergency contacts about help request
+  Future<void> _notifyEmergencyContacts(HelpRequest request) async {
+    try {
+      final userProfile = _userProfileService.currentProfile;
+      if (userProfile?.emergencyContacts.isEmpty ?? true) return;
+
+      final message = _generateEmergencyContactMessage(request);
+
+      // Send notification to emergency contacts (simulated)
+      for (final contact in userProfile!.emergencyContacts) {
+        // Simulate emergency contact response
+        Timer(Duration(minutes: Random().nextInt(10) + 1), () async {
+          await _simulateEmergencyContactResponse(request, contact);
+        });
+      }
+
+      debugPrint(
+        'HelpAssistantService: Emergency contacts notified for request ${request.id}',
+      );
+    } catch (e) {
+      debugPrint(
+        'HelpAssistantService: Error notifying emergency contacts - $e',
+      );
+    }
+  }
+
+  /// Generate message for emergency contacts
+  String _generateEmergencyContactMessage(HelpRequest request) {
+    final userProfile = _userProfileService.currentProfile;
+    final userName = userProfile?.name ?? 'User';
+
+    return '''
+🤝 HELP REQUEST from $userName
+
+Category: ${_getCategoryDisplayName(request.category)}
+Issue: ${request.title}
+
+${request.description}
+
+This is NOT an emergency, but $userName could use assistance.
+
+Location: ${request.location?.address ?? 'Location not available'}
+
+You can respond through the REDP!NG app or contact them directly.
+''';
+  }
+
+  /// Simulate emergency contact response
+  Future<void> _simulateEmergencyContactResponse(
+    HelpRequest request,
+    user_profile.EmergencyContact contact,
+  ) async {
+    final responses = [
+      'I saw your help request. I can assist you!',
+      'I\'m available to help. Let me know what you need.',
+      'I can come help you with this issue.',
+      'I\'m nearby and can lend a hand.',
+      'I have experience with this. I\'ll help you out.',
+    ];
+
+    final response = ServiceProviderResponse(
+      id: _generateId(),
+      providerId: contact.id,
+      providerName: contact.name,
+      providerType: ServiceProviderType.emergencyContact,
+      status: sos.ResponseStatus.acknowledged,
+      responseTime: DateTime.now(),
+      estimatedArrival: DateTime.now().add(
+        Duration(minutes: Random().nextInt(45) + 15),
+      ),
+      message: responses[Random().nextInt(responses.length)],
+    );
+
+    await addServiceProviderResponse(request.id, response);
+  }
+
+  /// Check if community should be notified
+  bool _shouldNotifyCommunity(HelpRequest request) {
+    final communityCategories = [
+      HelpCategory.lostFound,
+      HelpCategory.community,
+      HelpCategory.personalSafety,
+    ];
+
+    return communityCategories.contains(request.category) ||
+        request.tags.contains('community') ||
+        request.priority == HelpPriority.urgent;
+  }
+
+  /// Send help request to community chat
+  Future<void> _sendCommunityHelpRequest(HelpRequest request) async {
+    try {
+      final userProfile = _userProfileService.currentProfile;
+      final userName = userProfile?.name ?? 'Community Member';
+
+      final message =
+          '''
+🤝 Community Help Request
+
+$userName needs assistance with: ${request.title}
+
+Category: ${_getCategoryDisplayName(request.category)}
+Priority: ${_getPriorityDisplayName(request.priority)}
+
+${request.description}
+
+${request.location?.address != null ? 'Location: ${request.location!.address}' : ''}
+
+Can anyone help? Please respond if you're available.
+''';
+
+      await _chatService.sendMessage(
+        chatId: 'community_help',
+        content: message,
+        type: chat.MessageType.system,
+        priority: request.priority == HelpPriority.urgent
+            ? chat.MessagePriority.high
+            : chat.MessagePriority.normal,
+      );
+
+      debugPrint('HelpAssistantService: Community help request sent');
+    } catch (e) {
+      debugPrint(
+        'HelpAssistantService: Error sending community help request - $e',
+      );
+    }
+  }
+
+  /// Notify user of status change
+  Future<void> _notifyStatusChange(HelpRequest request, String? message) async {
+    String title;
+    String body;
+
+    switch (request.status) {
+      case HelpStatus.acknowledged:
+        title = '✅ Help Request Acknowledged';
+        body =
+            'A service provider has acknowledged your request for "${request.title}"';
+        break;
+      case HelpStatus.assigned:
+        title = '👤 Help Assigned';
+        body =
+            'A service provider has been assigned to help with "${request.title}"';
+        break;
+      case HelpStatus.inProgress:
+        title = '🔄 Help in Progress';
+        body = 'Assistance is being provided for "${request.title}"';
+        break;
+      case HelpStatus.resolved:
+        title = '✅ Help Request Resolved';
+        body = 'Your request for "${request.title}" has been completed';
+        break;
+      case HelpStatus.cancelled:
+        title = '❌ Help Request Cancelled';
+        body = 'Your request for "${request.title}" has been cancelled';
+        break;
+      case HelpStatus.noResponse:
+        title = '⚠️ No Response Yet';
+        body =
+            'We\'re still looking for someone to help with "${request.title}"';
+        break;
+      default:
+        return;
+    }
+
+    if (message != null) {
+      body += '\n\n$message';
+    }
+
+    await _notificationService.showNotification(
+      title: title,
+      body: body,
+      importance: NotificationImportance.defaultImportance,
+    );
+  }
+
+  /// Notify user of service provider response
+  Future<void> _notifyProviderResponse(
+    HelpRequest request,
+    ServiceProviderResponse response,
+  ) async {
+    String title = '🤝 ${response.providerName} Responded';
+    String body =
+        response.message ??
+        'Service provider has responded to your help request';
+
+    if (response.estimatedArrival != null) {
+      body += '\nETA: ${_formatETA(response.estimatedArrival!)}';
+    }
+
+    if (response.estimatedCost != null) {
+      body +=
+          '\nEstimated cost: \$${response.estimatedCost!.toStringAsFixed(0)}';
+    }
+
+    await _notificationService.showNotification(
+      title: title,
+      body: body,
+      importance: NotificationImportance.defaultImportance,
+    );
+  }
+
+  /// Get help requests by status
+  List<HelpRequest> getRequestsByStatus(HelpStatus status) {
+    return _helpRequests.where((r) => r.status == status).toList();
+  }
+
+  /// Get active help requests
+  List<HelpRequest> getActiveRequests() {
+    final activeStatuses = [
+      HelpStatus.pending,
+      HelpStatus.acknowledged,
+      HelpStatus.assigned,
+      HelpStatus.inProgress,
+    ];
+    return _helpRequests
+        .where((r) => activeStatuses.contains(r.status))
+        .toList();
+  }
+
+  /// Get help request by ID
+  HelpRequest? getRequest(String requestId) {
+    return _helpRequests.where((r) => r.id == requestId).firstOrNull;
+  }
+
+  /// Cancel help request
+  Future<void> cancelRequest(String requestId) async {
+    await updateRequestStatus(requestId, HelpStatus.cancelled);
+    debugPrint('HelpAssistantService: Request cancelled - $requestId');
+  }
+
+  /// Load help requests from storage
+  Future<void> _loadHelpRequests() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final requestsJson = prefs.getString('help_requests') ?? '[]';
+      final requestsList = jsonDecode(requestsJson) as List;
+
+      _helpRequests.clear();
+      _helpRequests.addAll(
+        requestsList.map((json) => HelpRequest.fromJson(json)),
+      );
+
+      debugPrint(
+        'HelpAssistantService: Loaded ${_helpRequests.length} help requests',
+      );
+    } catch (e) {
+      debugPrint('HelpAssistantService: Error loading help requests - $e');
+    }
+  }
+
+  /// Save help requests to storage
+  Future<void> _saveHelpRequests() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final requestsJson = jsonEncode(
+        _helpRequests.map((r) => r.toJson()).toList(),
+      );
+      await prefs.setString('help_requests', requestsJson);
+    } catch (e) {
+      debugPrint('HelpAssistantService: Error saving help requests - $e');
+    }
+  }
+
+  /// Generate unique request ID
+  String _generateRequestId() {
+    return 'help_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1000)}';
+  }
+
+  /// Generate unique ID
+  String _generateId() {
+    return 'resp_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1000)}';
+  }
+
+  /// Format ETA
+  String _formatETA(DateTime eta) {
+    final now = DateTime.now();
+    final difference = eta.difference(now);
+
+    if (difference.inMinutes < 1) {
+      return 'less than 1 minute';
+    } else if (difference.inMinutes == 1) {
+      return '1 minute';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes} minutes';
+    } else {
+      final hours = difference.inHours;
+      final minutes = difference.inMinutes % 60;
+      return '${hours}h ${minutes}m';
+    }
+  }
+
+  /// Get category display name
+  String _getCategoryDisplayName(HelpCategory category) {
+    switch (category) {
+      case HelpCategory.vehicle:
+        return 'Vehicle Assistance';
+      case HelpCategory.homeSecurity:
+        return 'Home Security';
+      case HelpCategory.personalSafety:
+        return 'Personal Safety';
+      case HelpCategory.lostFound:
+        return 'Lost & Found';
+      case HelpCategory.marine:
+        return 'Marine Assistance';
+      case HelpCategory.community:
+        return 'Community Support';
+      case HelpCategory.legal:
+        return 'Legal Assistance';
+      case HelpCategory.medicalNonEmergency:
+        return 'Medical Support';
+      case HelpCategory.utilities:
+        return 'Utilities';
+      case HelpCategory.other:
+        return 'General Help';
+    }
+  }
+
+  /// Get priority display name
+  String _getPriorityDisplayName(HelpPriority priority) {
+    switch (priority) {
+      case HelpPriority.low:
+        return 'Low Priority';
+      case HelpPriority.normal:
+        return 'Normal Priority';
+      case HelpPriority.high:
+        return 'High Priority';
+      case HelpPriority.urgent:
+        return 'Urgent';
+    }
+  }
+
+  /// Get subcategory display name
+  String getSubcategoryDisplayName(HelpSubcategory subcategory) {
+    switch (subcategory) {
+      case HelpSubcategory.breakdown:
+        return 'Vehicle Breakdown';
+      case HelpSubcategory.flatTire:
+        return 'Flat Tire';
+      case HelpSubcategory.deadBattery:
+        return 'Dead Battery';
+      case HelpSubcategory.outOfFuel:
+        return 'Out of Fuel';
+      case HelpSubcategory.lockedOut:
+        return 'Locked Out';
+      case HelpSubcategory.accidentMinor:
+        return 'Minor Accident';
+      case HelpSubcategory.towing:
+        return 'Towing Needed';
+      case HelpSubcategory.breakIn:
+        return 'Break-in';
+      case HelpSubcategory.suspiciousActivity:
+        return 'Suspicious Activity';
+      case HelpSubcategory.domesticViolence:
+        return 'Domestic Violence';
+      case HelpSubcategory.theft:
+        return 'Theft';
+      case HelpSubcategory.harassment:
+        return 'Harassment';
+      case HelpSubcategory.stalking:
+        return 'Stalking';
+      case HelpSubcategory.feelingUnsafe:
+        return 'Feeling Unsafe';
+      case HelpSubcategory.stuckTrapped:
+        return 'Stuck/Trapped';
+      case HelpSubcategory.lostPet:
+        return 'Lost Pet';
+      case HelpSubcategory.lostKeys:
+        return 'Lost Keys';
+      case HelpSubcategory.boatBreakdown:
+        return 'Boat Breakdown';
+      case HelpSubcategory.boatStuck:
+        return 'Boat Stuck';
+      case HelpSubcategory.neighborDispute:
+        return 'Neighbor Dispute';
+      case HelpSubcategory.legalAdvice:
+        return 'Legal Advice';
+      case HelpSubcategory.medicalTransport:
+        return 'Medical Transport';
+      case HelpSubcategory.powerOutage:
+        return 'Power Outage';
+      case HelpSubcategory.waterIssue:
+        return 'Water Issue';
+      case HelpSubcategory.generalHelp:
+        return 'General Help';
+      default:
+        return subcategory.name
+            .replaceAll('_', ' ')
+            .split(' ')
+            .map((word) => word[0].toUpperCase() + word.substring(1))
+            .join(' ');
+    }
+  }
+
+  // Getters
+  List<HelpRequest> get allRequests => List.unmodifiable(_helpRequests);
+  bool get isInitialized => _isInitialized;
+
+  // Callback setters
+  void setRequestCreatedCallback(Function(HelpRequest) callback) {
+    _onRequestCreated = callback;
+  }
+
+  void setRequestUpdatedCallback(Function(HelpRequest) callback) {
+    _onRequestUpdated = callback;
+  }
+
+  void setProviderResponseCallback(Function(ServiceProviderResponse) callback) {
+    _onProviderResponse = callback;
+  }
+
+  /// Dispose resources
+  void dispose() {
+    _helpRequests.clear();
+  }
+}
+
+/// Service provider information
+class ServiceProvider {
+  final String id;
+  final String name;
+  final ServiceProviderType type;
+  final double rating;
+  final int averageResponseTime; // minutes
+  final bool isAvailable;
+  final String phoneNumber;
+  final String serviceArea;
+  final List<String> specialties;
+
+  const ServiceProvider({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.rating,
+    required this.averageResponseTime,
+    required this.isAvailable,
+    required this.phoneNumber,
+    required this.serviceArea,
+    this.specialties = const [],
+  });
+}

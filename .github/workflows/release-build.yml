@@ -257,6 +257,13 @@ jobs:
           if [ -n "$pss" ]; then echo "total_pss_kb=${pss}" >> perf_metrics.txt; else echo "total_pss_kb=unknown" >> perf_metrics.txt; fi
           cpuLine=$(adb shell dumpsys cpuinfo | grep -E 'com.redping.redping' | head -n1 || true)
           if [ -n "$cpuLine" ]; then echo "cpu_info=${cpuLine}" >> perf_metrics.txt; fi
+          # Build a perf history JSON entry
+          commit_sha=${GITHUB_SHA}
+          tag_ref=${GITHUB_REF##*/}
+          startup=$(grep -E '^startup_ms=' perf_metrics.txt | cut -d'=' -f2)
+          pss_val=$(grep -E '^total_pss_kb=' perf_metrics.txt | cut -d'=' -f2)
+          thresholds_json=$(jq -n --arg startup_thr "${STARTUP_THRESHOLD_MS}" --arg pss_thr "${MAX_PSS_KB}" '{startupThresholdMs: ($startup_thr|tonumber?), maxPssKb: ($pss_thr|tonumber?)}')
+          jq -n --arg sha "$commit_sha" --arg tag "$tag_ref" --arg startup "$startup" --arg pss "$pss_val" --argjson thr "$thresholds_json" '{commitSha:$sha, tag:$tag, startupMs:($startup|tonumber?), totalPssKb:($pss|tonumber?), thresholds:$thr, timestamp: (now|strftime("%Y-%m-%dT%H:%M:%SZ"))}' > perf_history_entry.json || echo '{"error":"jq unavailable"}' > perf_history_entry.json
 
       - name: Enforce memory threshold
         if: success()
@@ -284,6 +291,13 @@ jobs:
         with:
           name: startup-perf-metrics
           path: perf_metrics.txt
+
+      - name: Upload perf history entry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-history-entry
+          path: perf_history_entry.json
 
       - name: Publish to Play (internal track)
         if: false
@@ -353,3 +367,35 @@ jobs:
           Write-Host 'Publishing bundle to Google Play internal track (gated by previous job success).'
           cd android
           ./gradlew :app:publishReleaseBundle --stacktrace
+
+  notify:
+    if: always()
+    needs: [build-release, device-smoke, api-probe, publish-play]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - name: Compose notification summary
+        shell: bash
+        run: |
+          build_status='${{ needs.build-release.result }}'
+          smoke_status='${{ needs.device-smoke.result }}'
+          probe_status='${{ needs.api-probe.result }}'
+          publish_status='${{ needs.publish-play.result }}'
+          summary="Build: $build_status, Smoke: $smoke_status, API: $probe_status, Publish: $publish_status"
+          echo "$summary" > notify_summary.txt
+          echo "Summary: $summary"
+          if [ -f perf_history_entry.json ]; then cat perf_history_entry.json >> notify_summary.txt; fi
+      - name: Send Slack notification (if webhook provided)
+        if: env.SLACK_WEBHOOK_URL != ''
+        shell: bash
+        run: |
+          text=$(sed ':a;N;$!ba;s/\n/ | /g' notify_summary.txt)
+          payload=$(jq -n --arg t "$text" '{text:$t}')
+          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" || echo 'Slack post failed'
+      - name: Upload notification summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: notify-summary
+          path: notify_summary.txt

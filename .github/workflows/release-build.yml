@@ -190,6 +190,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load dynamic thresholds (if available)
+        shell: bash
+        run: |
+          if [ -f .ci/dynamic_thresholds.json ]; then
+            dynStartup=$(jq -r '.dynamicStartupThresholdMs // empty' .ci/dynamic_thresholds.json)
+            dynMem=$(jq -r '.dynamicMaxPssKb // empty' .ci/dynamic_thresholds.json)
+            if [ -n "$dynStartup" ] && [ "$dynStartup" != "null" ]; then echo "DYN_STARTUP_THRESHOLD_MS=$dynStartup" >> $GITHUB_ENV; fi
+            if [ -n "$dynMem" ] && [ "$dynMem" != "null" ]; then echo "DYN_MAX_PSS_KB=$dynMem" >> $GITHUB_ENV; fi
+            echo "Loaded dynamic thresholds startup=$dynStartup mem=$dynMem"
+          else
+            echo "No dynamic thresholds file found; using static secrets."
+          fi
+
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
@@ -222,7 +235,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          threshold=${STARTUP_THRESHOLD_MS:-0}
+          threshold=${DYN_STARTUP_THRESHOLD_MS:-${STARTUP_THRESHOLD_MS:-0}}
           echo "Configured threshold: ${threshold}ms"
           if [ "$threshold" -gt 0 ]; then
             line=$(grep -E 'Displayed com\.redping\.redping' smoke_log.txt || true)
@@ -272,7 +285,7 @@ jobs:
         if: success()
         shell: bash
         run: |
-          max=${MAX_PSS_KB:-0}
+          max=${DYN_MAX_PSS_KB:-${MAX_PSS_KB:-0}}
           if [ "$max" -gt 0 ]; then
             pss=$(grep -E '^total_pss_kb=' perf_metrics.txt | cut -d'=' -f2)
             if [ -n "$pss" ] && [ "$pss" != "unknown" ]; then

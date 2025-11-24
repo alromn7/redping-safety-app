@@ -518,6 +518,33 @@ jobs:
           echo "$summary" > notify_summary.txt
           echo "Summary: $summary"
           if [ -f perf_history_entry.json ]; then cat perf_history_entry.json >> notify_summary.txt; fi
+      - name: Download perf & thresholds artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: notify_artifacts
+      - name: Compute regression metrics
+        shell: bash
+        run: |
+          entryFile=notify_artifacts/perf-history-entry/perf_history_entry.json
+          dynFile=notify_artifacts/dynamic-thresholds/dynamic_thresholds.json
+          if [ -f "$entryFile" ] && [ -f "$dynFile" ]; then
+            currentStartup=$(jq -r '.startupMs // 0' "$entryFile")
+            currentPss=$(jq -r '.totalPssKb // 0' "$entryFile")
+            avgStartup=$(jq -r '.startupStats.averageMs // 0' "$dynFile")
+            avgMem=$(jq -r '.memoryStats.averagePssKb // 0' "$dynFile")
+            dynStartup=$(jq -r '.dynamicStartupThresholdMs // 0' "$dynFile")
+            dynMem=$(jq -r '.dynamicMaxPssKb // 0' "$dynFile")
+            regStartup=0
+            regMem=0
+            if [ "$avgStartup" -gt 0 ]; then regStartup=$(printf '%.2f' $(echo "( $currentStartup - $avgStartup ) * 100 / $avgStartup" | bc -l)); fi
+            if [ "$avgMem" -gt 0 ]; then regMem=$(printf '%.2f' $(echo "( $currentPss - $avgMem ) * 100 / $avgMem" | bc -l)); fi
+            echo "startup_regression_pct=$regStartup" >> notify_summary.txt
+            echo "memory_regression_pct=$regMem" >> notify_summary.txt
+            echo "dynamic_startup_threshold_ms=$dynStartup" >> notify_summary.txt
+            echo "dynamic_memory_threshold_kb=$dynMem" >> notify_summary.txt
+          else
+            echo "Regression metrics unavailable (missing artifacts)" >> notify_summary.txt
+          fi
       - name: Send Slack notification (if webhook provided)
         if: env.SLACK_WEBHOOK_URL != ''
         shell: bash

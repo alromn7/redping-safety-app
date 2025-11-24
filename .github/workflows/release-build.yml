@@ -161,12 +161,55 @@ jobs:
           }
           if (Test-Path checksums.txt) { Write-Host 'Checksum file created.' } else { Write-Host 'No artifacts present for hashing.' }
 
+      - name: Upload mapping file
+        if: success() && hashFiles('build/app/outputs/mapping/release/mapping.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: proguard-mapping
+          path: build/app/outputs/mapping/release/mapping.txt
+
       - name: Upload checksum log
         if: success() && hashFiles('checksums.txt') != ''
         uses: actions/upload-artifact@v4
         with:
           name: release-checksums
           path: checksums.txt
+
+  device-smoke:
+    if: ${{ success() && secrets.DEVICE_SMOKE == 'true' }}
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-release-apk
+          path: artifacts
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Start emulator & run smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          script: |
+            adb install artifacts/app-release.apk
+            adb shell monkey -p com.redping.redping -c android.intent.category.LAUNCHER 1
+            sleep 5
+            adb logcat -d | grep com.redping.redping | head -n 200 > smoke_log.txt
+            test -s smoke_log.txt || echo 'No relevant log lines captured.' > smoke_log.txt
+
+      - name: Upload smoke logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-smoke-logs
+          path: smoke_log.txt
 
       - name: Publish to Play (internal track)
         if: success() && env.PLAY_PUBLISH == 'true' && env.PLAY_SERVICE_ACCOUNT_JSON_BASE64 != '' && !contains(github.ref_name,'-rc') && !contains(github.ref_name,'-dryrun')

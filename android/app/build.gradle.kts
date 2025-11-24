@@ -11,7 +11,8 @@ plugins {
 
 android {
     namespace = "com.redping.redping"
-    compileSdk = 36
+    // Use stable compileSdk (36 may be preview and can break builds)
+    compileSdk = 34
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -27,11 +28,17 @@ android {
     defaultConfig {
         applicationId = "com.redping.redping"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        multiDexEnabled = true
+        // multiDex disabled after shrink/R8; will revert if method count exceeds 64K.
+        // Restrict native ABIs to arm64 only for smaller distribution size.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
+
+    // (Removed) ABI splits - now using ndk abiFilters arm64-only. Use CLI --split-per-abi only if reintroducing multiple ABIs.
 
     // Configure signing for release using key.properties if present
     val keystoreProperties = Properties()
@@ -53,8 +60,9 @@ android {
 
     buildTypes {
         release {
-            // Use debug signing to match existing Google Sign-In configuration
-            signingConfig = signingConfigs.getByName("debug")
+            // Use release keystore if configured; fallback to debug if missing.
+            val releaseConfig = signingConfigs.findByName("release")
+            signingConfig = releaseConfig ?: signingConfigs.getByName("debug")
 
             // Enable code shrinking and obfuscation for production
             isMinifyEnabled = true
@@ -63,12 +71,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            
-            // Note: NDK filters commented out for split-per-abi builds
-            // Uncomment for AAB builds only
-            // ndk {
-            //     abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
-            // }
         }
     }
     
@@ -77,10 +79,17 @@ android {
         abortOnError = false
     }
     
-    // Compress native libraries
+    // Packaging optimizations: compress native libs & drop redundant META-INF resources
     packaging {
-        jniLibs {
-            useLegacyPackaging = false
+        jniLibs { useLegacyPackaging = false }
+        resources {
+            excludes += listOf(
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/DEPENDENCIES",
+                "META-INF/*.version",
+                "META-INF/*.properties"
+            )
         }
     }
 }
@@ -91,6 +100,6 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
-    implementation("androidx.multidex:multidex:2.0.1")
+    // Removed multidex dependency (evaluate if still necessary). Re-add if build fails with Dex overflow.
     implementation("com.google.android.play:integrity:1.3.0")
 }

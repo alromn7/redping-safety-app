@@ -2,7 +2,7 @@ name: redping_14v
 description: "REDP!NG Safety Ecosystem - A comprehensive safety app with crash detection, SOS alerts, and community features."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.9.2
@@ -16,8 +16,8 @@ dependencies:
   firebase_core: ^3.15.2
   firebase_auth: ^5.3.3
   cloud_firestore: ^5.4.4
-  firebase_database: ^11.0.2
-  firebase_crashlytics: ^4.1.3
+  # firebase_database: ^11.0.2  # REMOVED: Phase 2 - not used anywhere in codebase
+  # firebase_crashlytics: ^4.1.3  # REMOVED: Phase 2 - minimal usage, production error tracking via Firebase Console
   google_sign_in: ^6.2.1
   go_router: ^14.6.2
   flutter_svg: ^2.0.10+1
@@ -29,7 +29,7 @@ dependencies:
   # Location & Maps
   geolocator: ^10.1.0
   url_launcher: ^6.2.1
-  location: ^6.0.0
+  # location: ^6.0.0  # REMOVED: Phase 2 - duplicate of geolocator, not used in codebase
   geocoding: ^3.0.0
   
   # Sensors & Hardware
@@ -37,7 +37,7 @@ dependencies:
   device_info_plus: ^10.1.2
   battery_plus: ^6.1.0
   vibration: ^2.0.0
-  audioplayers: ^6.1.0
+  # audioplayers: ^6.1.0  # REMOVED: Phase 1 - minimal usage, use vibration instead
   
   # Communication & Networking
   http: ^1.2.2
@@ -61,17 +61,17 @@ dependencies:
   
   # Media & Files
   image_picker: ^1.1.2
-  signature: ^5.5.0
+  # signature: ^5.5.0  # REMOVED: Phase 1 - only used in volunteer mission page
   permission_handler: ^11.0.1
   file_picker: ^8.1.2
   
   # Bluetooth & Device Scanning
-  flutter_blue_plus: ^1.32.4
+  # flutter_blue_plus: ^1.32.4  # REMOVED: Phase 1 - gadgets feature rarely used
   mobile_scanner: ^5.0.0
   
   # AI & Speech Recognition
-  speech_to_text: ^7.0.0
-  flutter_tts: ^4.2.0
+  # speech_to_text: ^7.0.0  # REMOVED: Phase 1 - already commented out as broken
+  # flutter_tts: ^4.2.0  # REMOVED: Phase 1 - deprecated/unused
   android_intent_plus: ^5.1.0
   quick_actions: ^1.1.0
   google_generative_ai: ^0.4.6
@@ -116,10 +116,10 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
-    - assets/icons/
-    - assets/sounds/
-    - assets/docs/
     - assets/pins/
+    - assets/docs/privacy_policy.md
+    - assets/docs/terms_and_conditions.md
+    - assets/docs/help_and_support.md
 
 # App Icon Configuration
 flutter_launcher_icons:

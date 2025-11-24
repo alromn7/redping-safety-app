@@ -6,6 +6,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-release:
     runs-on: windows-latest
@@ -368,6 +371,121 @@ jobs:
           cd android
           ./gradlew :app:publishReleaseBundle --stacktrace
 
+  adaptive-thresholds:
+    if: ${{ needs.device-smoke.result == 'success' }}
+    needs: [device-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download perf history entry
+        uses: actions/download-artifact@v4
+        with:
+          name: perf-history-entry
+          path: perf_entry
+      - name: Append perf history
+        shell: bash
+        run: |
+          mkdir -p .ci
+          entryFile=perf_entry/perf_history_entry.json
+          if [ ! -f "$entryFile" ]; then echo 'No perf history entry artifact found'; exit 0; fi
+          touch .ci/perf_history.jsonl
+          cat "$entryFile" >> .ci/perf_history.jsonl
+          echo >> .ci/perf_history.jsonl
+          lines=$(wc -l < .ci/perf_history.jsonl)
+          echo "History lines: $lines"
+          tailCount=$(( lines < 15 ? lines : 15 ))
+          startupVals=$(tail -n "$tailCount" .ci/perf_history.jsonl | jq -r 'select(.startupMs!=null) | .startupMs')
+          memVals=$(tail -n "$tailCount" .ci/perf_history.jsonl | jq -r 'select(.totalPssKb!=null) | .totalPssKb')
+          dynStartupThr=0
+          dynMemThr=0
+          if [ -n "$startupVals" ]; then
+            avg=$(echo "$startupVals" | awk '{sum+=$1} END {if (NR>0) print sum/NR}')
+            dynStartupThr=$(printf '%.0f' $(echo "$avg * 1.40" | bc -l))
+          fi
+          if [ -n "$memVals" ]; then
+            avgm=$(echo "$memVals" | awk '{sum+=$1} END {if (NR>0) print sum/NR}')
+            dynMemThr=$(printf '%.0f' $(echo "$avgm * 1.35" | bc -l))
+          fi
+          jq -n --arg startup "$dynStartupThr" --arg mem "$dynMemThr" '{dynamicStartupThresholdMs: ($startup|tonumber?), dynamicMaxPssKb: ($mem|tonumber?)}' > .ci/dynamic_thresholds.json
+      - name: Commit updated history & thresholds
+        shell: bash
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add .ci/perf_history.jsonl .ci/dynamic_thresholds.json || true
+          git commit -m "CI: update perf history & dynamic thresholds" || echo "No changes to commit"
+          git push origin HEAD:main || echo "Push skipped"
+      - name: Upload dynamic thresholds
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynamic-thresholds
+          path: .ci/dynamic_thresholds.json
+
+  weekly-report:
+    if: ${{ needs.adaptive-thresholds.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+    needs: [adaptive-thresholds]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Generate weekly report (Monday only)
+        shell: bash
+        run: |
+          dow=$(date +%u) # 1=Mon
+          if [ "$dow" != "1" ]; then echo "Not Monday; skipping weekly report"; exit 0; fi
+          if [ ! -f .ci/perf_history.jsonl ]; then echo "No history file"; exit 0; fi
+          last7=$(tail -n 70 .ci/perf_history.jsonl | jq -s '[-7:]')
+          avgStartup=$(echo "$last7" | jq '[ .[] | .startupMs // empty ] | if length>0 then (add/length) else 0 end')
+          avgMem=$(echo "$last7" | jq '[ .[] | .totalPssKb // empty ] | if length>0 then (add/length) else 0 end')
+          jq -n --argjson data "$last7" --arg avgS "$avgStartup" --arg avgM "$avgMem" '{weekEntries:$data, averages:{startupMs:($avgS|tonumber?), totalPssKb:($avgM|tonumber?)}, generated: (now|strftime("%Y-%m-%dT%H:%M:%SZ"))}' > .ci/perf_weekly_report.json
+          printf "# Weekly Performance Report\nGenerated: $(date -u)\nAverage Startup (ms): $avgStartup\nAverage PSS (KB): $avgMem\n" > perf_weekly_report.md
+          echo "(See .ci/perf_weekly_report.json for raw data)" >> perf_weekly_report.md
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add .ci/perf_weekly_report.json perf_weekly_report.md || true
+          git commit -m "CI: weekly performance report" || echo "No weekly changes"
+          git push origin HEAD:main || echo "Push skipped"
+      - name: Upload weekly report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-performance-report
+          path: perf_weekly_report.md
+
+  rollback-or-tag:
+    if: always()
+    needs: [build-release, device-smoke, api-probe, publish-play]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      ROLLBACK_ENABLED: ${{ secrets.ROLLBACK_ENABLED }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Create failure tag if any failed
+        shell: bash
+        run: |
+          statuses=('${{ needs.build-release.result }}' '${{ needs.device-smoke.result }}' '${{ needs.api-probe.result }}' '${{ needs.publish-play.result }}')
+          fail=false
+          for s in "${statuses[@]}"; do [ "$s" = "failure" ] && fail=true; done
+          if [ "$fail" = true ]; then
+            echo "Detected failure in pipeline"
+            if [ "$ROLLBACK_ENABLED" = "true" ]; then
+              git config user.name "github-actions"
+              git config user.email "github-actions@users.noreply.github.com"
+              prev=$(git rev-parse HEAD)
+              tagName="failed-${GITHUB_RUN_NUMBER}"
+              git tag "$tagName" "$prev"
+              git push origin "$tagName" || echo "Tag push failed"
+              echo "Failure tag created: $tagName"
+            else
+              echo "Rollback disabled; skipping tag creation"
+            fi
+          else
+            echo "No failures; no rollback/tag needed"
   notify:
     if: always()
     needs: [build-release, device-smoke, api-probe, publish-play]

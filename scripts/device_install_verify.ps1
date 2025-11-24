@@ -4,15 +4,19 @@ Automates: APK signature check, hash, device detection, install/update, launch, 
 Usage (PowerShell):
   powershell -ExecutionPolicy Bypass -File scripts\device_install_verify.ps1 -ApkPath build\app\outputs\flutter-apk\app-release.apk -PackageId com.redping.redping
 Parameters:
-  -ApkPath <string>         Path to APK (default: build\app\outputs\flutter-apk\app-release.apk)
-  -PackageId <string>       ApplicationId (default: com.redping.redping)
-  -Events <int>             Monkey launch events after start (default: 1)
-  -CaptureSeconds <int>     Seconds of logcat capture after launch (default: 10)
-  -SkipSignature            Skip apksigner signature verification
-  -SkipHash                 Skip SHA256 hash output
-  -SkipInstall              Skip install step (only verify + logs)
-  -ForceReinstall           Use adb install -r even if app already present (default: true)
-  -VerboseLogs              Show broader logcat categories
+  -ApkPath <string>          Path to APK (default: build\app\outputs\flutter-apk\app-release.apk)
+  -PackageId <string>        ApplicationId (default: com.redping.redping)
+  -Events <int>              Monkey launch events after start (default: 1)
+  -CaptureSeconds <int>      Seconds of logcat capture after launch (default: 10)
+  -SkipSignature             Skip apksigner signature verification
+  -SkipHash                  Skip SHA256 hash output
+  -SkipInstall               Skip install step (only verify + logs)
+  -ForceReinstall            Use adb install -r (default: true)
+  -VerboseLogs               Show broader logcat categories
+  -FreshInstall              Uninstall existing package before install
+  -CollectPerf               Capture startup time & memory usage metrics
+  -PerfSeconds <int>         Seconds to wait before perf collection (default: 5)
+  -ExportJson <string>       Optional path to write JSON report (metrics + signature)
 #>
 param(
   [string] $ApkPath = 'build\app\outputs\flutter-apk\app-release.apk',
@@ -23,7 +27,11 @@ param(
   [switch] $SkipHash,
   [switch] $SkipInstall,
   [switch] $ForceReinstall,
-  [switch] $VerboseLogs
+  [switch] $VerboseLogs,
+  [switch] $FreshInstall,
+  [switch] $CollectPerf,
+  [int] $PerfSeconds = 5,
+  [string] $ExportJson
 )
 
 Set-StrictMode -Version Latest
@@ -54,6 +62,7 @@ function Verify-Signature($apk) {
   if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed." }
   if ($sigOut -match 'Android Debug') { throw "APK signed with debug certificate (Android Debug)." }
   Write-Host '[sig] Signature OK (non-debug).' -ForegroundColor Green
+  return $sigOut
 }
 
 function Get-Hash($apk) {
@@ -66,6 +75,11 @@ function Ensure-Device {
   $devices = & adb devices | Select-String 'device$'
   if (-not $devices) { throw 'No connected device in "device" state. Run: adb devices and enable USB debugging on phone.' }
   Write-Host "[device] Connected: $($devices -join ', ')" -ForegroundColor Green
+}
+
+function Uninstall-App($pkg) {
+  Write-Host "[uninstall] Removing $pkg if present" -ForegroundColor Cyan
+  & adb uninstall $pkg | Out-Null
 }
 
 function Install-Apk($apk,$pkg) {
@@ -85,6 +99,22 @@ function Launch-App($pkg,$events) {
   Start-Sleep -Seconds 2
 }
 
+function Collect-Perf($pkg,$waitSeconds) {
+  Write-Host "[perf] Collecting performance metrics after ${waitSeconds}s..." -ForegroundColor Cyan
+  Start-Sleep -Seconds $waitSeconds
+  $mem = & adb shell dumpsys meminfo $pkg 2>$null
+  $memLine = ($mem | Select-String -Pattern 'TOTAL').ToString().Trim()
+  # Startup time: parse ActivityManager Displayed log line
+  $displayed = & adb logcat -d | Select-String -Pattern "Displayed $pkg" | Select-Object -Last 1
+  $startupMs = $null
+  if ($displayed) {
+    if ($displayed.ToString() -match '([0-9]+)ms') { $startupMs = [int]$Matches[1] }
+  }
+  Write-Host "[perf] Startup(ms): $startupMs" -ForegroundColor Yellow
+  Write-Host "[perf] Mem summary: $memLine" -ForegroundColor Yellow
+  return [pscustomobject]@{ StartupMs=$startupMs; MemLine=$memLine }
+}
+
 function Capture-Logs($pkg,$seconds,$verbose) {
   Write-Host "[logs] Capturing ${seconds}s of filtered logcat..." -ForegroundColor Cyan
   $filter = if ($verbose) { '' } else { "-s flutter ActivityManager System.err" }
@@ -101,11 +131,20 @@ function Main {
   Assert-Command 'adb'
   if (-not $SkipSignature) { Assert-Command 'java' } # keytool comes with JDK; apksigner separate
   Ensure-Device
-  if (-not $SkipSignature) { Verify-Signature $ApkPath }
+  $sig = $null
+  if (-not $SkipSignature) { $sig = Verify-Signature $ApkPath }
   if (-not $SkipHash) { Get-Hash $ApkPath }
+  if ($FreshInstall) { Uninstall-App $PackageId }
   Install-Apk $ApkPath $PackageId
   Launch-App $PackageId $Events
   Capture-Logs $PackageId $CaptureSeconds $VerboseLogs
+  $perf = $null
+  if ($CollectPerf) { $perf = Collect-Perf $PackageId $PerfSeconds }
+  if ($ExportJson) {
+    $obj = [pscustomobject]@{ Package=$PackageId; ApkPath=$ApkPath; Perf=$perf; Signature=$sig }
+    $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $ExportJson -Encoding UTF8
+    Write-Host "[export] JSON written to $ExportJson" -ForegroundColor Green
+  }
   Write-Host '[done] Device install & verification complete.' -ForegroundColor Green
 }
 

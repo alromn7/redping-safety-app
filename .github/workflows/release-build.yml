@@ -1,0 +1,177 @@
+name: Release Build & Verify
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+      PLAY_PUBLISH: ${{ secrets.PLAY_PUBLISH }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Decode Play service account (if provided)
+        if: env.PLAY_SERVICE_ACCOUNT_JSON_BASE64 != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path android\play | Out-Null
+          [IO.File]::WriteAllBytes('android/play/service-account.json',[Convert]::FromBase64String($Env:PLAY_SERVICE_ACCOUNT_JSON_BASE64))
+          Write-Host 'Play service account JSON decoded.'
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            **/build
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: ${{ runner.os }}-pub-
+
+      - name: Decode release keystore
+        shell: pwsh
+        run: |
+          if (-not $Env:ANDROID_KEYSTORE_BASE64) { Write-Host 'No keystore secret provided; using debug signing.'; exit 0 }
+          New-Item -ItemType Directory -Force -Path android\keystore | Out-Null
+          [IO.File]::WriteAllBytes('android\keystore\redping-release.jks',[Convert]::FromBase64String($Env:ANDROID_KEYSTORE_BASE64))
+          Write-Host 'Release keystore decoded.'
+
+      - name: Generate key.properties (if signing provided)
+        shell: pwsh
+        run: |
+          if (-not $Env:ANDROID_KEYSTORE_PASSWORD -or -not $Env:ANDROID_KEY_PASSWORD -or -not $Env:ANDROID_KEY_ALIAS) {
+            Write-Host 'Signing secrets incomplete; skipping key.properties.'; exit 0 }
+          $lines = @(
+            "storePassword=$Env:ANDROID_KEYSTORE_PASSWORD",
+            "keyPassword=$Env:ANDROID_KEY_PASSWORD",
+            "keyAlias=$Env:ANDROID_KEY_ALIAS",
+            "storeFile=keystore/redping-release.jks"
+          )
+          $lines | Set-Content -Path android\key.properties -Encoding UTF8
+          Write-Host 'key.properties generated.'
+
+      - name: Export signing env vars
+        shell: pwsh
+        run: |
+          $storeFile = "$PWD/android/keystore/redping-release.jks"
+          if (-not (Test-Path $storeFile)) { Write-Host 'Keystore not found; will fall back to debug signing.' }
+          echo "STORE_FILE=$storeFile" >> $Env:GITHUB_ENV
+          if ($Env:ANDROID_KEYSTORE_PASSWORD) { echo "STORE_PASSWORD=$Env:ANDROID_KEYSTORE_PASSWORD" >> $Env:GITHUB_ENV }
+          if ($Env:ANDROID_KEY_ALIAS) { echo "KEY_ALIAS=$Env:ANDROID_KEY_ALIAS" >> $Env:GITHUB_ENV }
+          if ($Env:ANDROID_KEY_PASSWORD) { echo "KEY_PASSWORD=$Env:ANDROID_KEY_PASSWORD" >> $Env:GITHUB_ENV }
+          Write-Host 'Signing environment variables exported.'
+
+      - name: Validate keystore & alias
+        shell: pwsh
+        run: |
+          if (-not $Env:STORE_FILE -or -not (Test-Path $Env:STORE_FILE)) { Write-Host 'No release keystore to validate.'; exit 0 }
+          if (-not $Env:STORE_PASSWORD -or -not $Env:KEY_ALIAS) { Write-Host 'Missing STORE_PASSWORD or KEY_ALIAS; cannot validate keystore.'; exit 0 }
+          & "$Env:JAVA_HOME\bin\keytool" -list -keystore $Env:STORE_FILE -storepass $Env:STORE_PASSWORD -alias $Env:KEY_ALIAS 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error 'Keystore validation failed (bad password or alias).'; exit 1 } else { Write-Host 'Keystore validation passed.' }
+
+      - name: Install dependencies
+        run: flutter pub get
+        shell: powershell
+
+      - name: Run release build & verification script
+        run: powershell -ExecutionPolicy Bypass -File .\release_build_verify.ps1 -SkipClean
+
+      - name: Upload AAB artifact
+        if: success() && hashFiles('build/app/outputs/bundle/release/app-release.aab') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload APK artifact
+        if: success() && hashFiles('build/app/outputs/flutter-apk/app-release.apk') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Print fingerprints summary
+        shell: pwsh
+        run: |
+          if (-not $Env:STORE_FILE -or -not (Test-Path $Env:STORE_FILE)) { Write-Host 'No release keystore; skipping fingerprint.'; exit 0 }
+          if (-not $Env:STORE_PASSWORD -or -not $Env:KEY_ALIAS) { Write-Host 'Missing alias/password; skipping fingerprint.'; exit 0 }
+          & "$Env:JAVA_HOME\bin\keytool" -list -v -keystore $Env:STORE_FILE -storepass $Env:STORE_PASSWORD -alias $Env:KEY_ALIAS 2>$null | findstr /R "SHA1: SHA-256:" || exit 0
+
+      - name: Verify artifact signatures
+        shell: pwsh
+        run: |
+          $apkPath = "build/app/outputs/flutter-apk/app-release.apk"
+          $aabPath = "build/app/outputs/bundle/release/app-release.aab"
+          # Find latest build-tools containing apksigner
+          $btRoot = $Env:ANDROID_HOME
+          if (-not $btRoot) { Write-Host 'ANDROID_HOME not set; skipping signature verification.'; exit 0 }
+          $apksigner = Get-ChildItem "$btRoot/build-tools" -Filter apksigner* -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $apksigner) { Write-Host 'apksigner not found; skipping APK verification.' }
+          # Verify APK
+          if (Test-Path $apkPath -and $apksigner) {
+            & $apksigner.FullName verify --verbose --print-certs $apkPath | Tee-Object -Variable apkVerify
+            if ($LASTEXITCODE -ne 0) { Write-Error 'APK signature verification failed.'; exit 1 }
+            if ($apkVerify -match 'androiddebugkey') { Write-Error 'APK signed with debug key (androiddebugkey). Failing.'; exit 1 }
+            Write-Host 'APK signature verification passed.'
+          } else { Write-Host 'No release APK found or apksigner missing; skipped.' }
+          # Verify AAB using jarsigner
+          if (Test-Path $aabPath) {
+            & "$Env:JAVA_HOME\bin\jarsigner" -verify -verbose -certs $aabPath | Tee-Object -Variable aabVerify
+            if ($LASTEXITCODE -ne 0) { Write-Error 'AAB jarsigner verification failed.'; exit 1 }
+            if ($aabVerify -match 'androiddebugkey') { Write-Error 'AAB signed with debug key. Failing.'; exit 1 }
+            Write-Host 'AAB signature verification passed.'
+          } else { Write-Host 'No release AAB found; skipped.' }
+          Write-Host 'Signature verification completed.'
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            'build/app/outputs/flutter-apk/app-release.apk',
+            'build/app/outputs/bundle/release/app-release.aab'
+          )
+          foreach ($f in $files) {
+            if (Test-Path $f) {
+              $hash = (Get-FileHash -Algorithm SHA256 -Path $f).Hash
+              Write-Host "SHA256 $f => $hash"
+              Add-Content -Path checksums.txt "${f}: ${hash}" -Encoding UTF8
+            }
+          }
+          if (Test-Path checksums.txt) { Write-Host 'Checksum file created.' } else { Write-Host 'No artifacts present for hashing.' }
+
+      - name: Upload checksum log
+        if: success() && hashFiles('checksums.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-checksums
+          path: checksums.txt
+
+      - name: Publish to Play (internal track)
+        if: success() && env.PLAY_PUBLISH == 'true' && env.PLAY_SERVICE_ACCOUNT_JSON_BASE64 != '' && !contains(github.ref_name,'-rc') && !contains(github.ref_name,'-dryrun')
+        shell: pwsh
+        run: |
+          Write-Host 'Publishing bundle to Google Play internal track.'
+          ./gradlew :app:publishReleaseBundle --stacktrace
+        working-directory: android

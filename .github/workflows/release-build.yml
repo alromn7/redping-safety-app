@@ -345,13 +345,15 @@ jobs:
           path: api_probe.json
 
   publish-play:
-    if: ${{ needs.build-release.result == 'success' && needs.device-smoke.result == 'success' && needs.api-probe.result == 'success' }}
-    needs: [build-release, device-smoke, api-probe]
+    if: ${{ needs.build-release.result == 'success' && needs.device-smoke.result == 'success' && needs.api-probe.result == 'success' && needs.adaptive-thresholds.result == 'success' }}
+    needs: [build-release, device-smoke, api-probe, adaptive-thresholds]
     runs-on: windows-latest
     timeout-minutes: 15
     env:
       PLAY_PUBLISH: ${{ secrets.PLAY_PUBLISH }}
       PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+      STARTUP_REGRESSION_THRESHOLD_PCT: ${{ secrets.STARTUP_REGRESSION_THRESHOLD_PCT }}
+      MEMORY_REGRESSION_THRESHOLD_PCT: ${{ secrets.MEMORY_REGRESSION_THRESHOLD_PCT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -369,6 +371,38 @@ jobs:
         with:
           name: app-release-aab
           path: artifacts
+
+      - name: Download dynamic thresholds & perf entry
+        uses: actions/download-artifact@v4
+        with:
+          path: publish_artifacts
+
+      - name: Evaluate regression gating
+        shell: pwsh
+        run: |
+          $entry = 'publish_artifacts/perf-history-entry/perf_history_entry.json'
+          $dyn   = 'publish_artifacts/dynamic-thresholds/dynamic_thresholds.json'
+          if (-not (Test-Path $entry) -or -not (Test-Path $dyn)) { Write-Host 'Missing artifacts for regression gating; skipping.'; exit 0 }
+          $entryJson = Get-Content $entry | ConvertFrom-Json
+          $dynJson   = Get-Content $dyn | ConvertFrom-Json
+          $currentStartup = $entryJson.startupMs
+          $currentPss     = $entryJson.totalPssKb
+          $avgStartup     = $dynJson.startupStats.averageMs
+          $avgMem         = $dynJson.memoryStats.averagePssKb
+          $startupRegPct = 0
+          $memRegPct = 0
+          if ($avgStartup -and $avgStartup -gt 0 -and $currentStartup) { $startupRegPct = [Math]::Round((($currentStartup - $avgStartup) * 100.0 / $avgStartup),2) }
+          if ($avgMem -and $avgMem -gt 0 -and $currentPss) { $memRegPct = [Math]::Round((($currentPss - $avgMem) * 100.0 / $avgMem),2) }
+          Write-Host "Startup regression %: $startupRegPct"
+            Write-Host "Memory regression %: $memRegPct"
+          $startupThr = $Env:STARTUP_REGRESSION_THRESHOLD_PCT
+          $memThr = $Env:MEMORY_REGRESSION_THRESHOLD_PCT
+          if ($startupThr) { Write-Host "Startup regression threshold: $startupThr" }
+          if ($memThr) { Write-Host "Memory regression threshold: $memThr" }
+          $fail = $false
+          if ($startupThr -and $startupRegPct -gt [double]$startupThr) { Write-Host "Startup regression exceeds threshold"; $fail = $true }
+          if ($memThr -and $memRegPct -gt [double]$memThr) { Write-Host "Memory regression exceeds threshold"; $fail = $true }
+          if ($fail) { Write-Error 'Regression gating failed'; exit 1 } else { Write-Host 'Regression gating passed.' }
 
       - name: Setup Java
         uses: actions/setup-java@v4

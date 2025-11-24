@@ -182,6 +182,7 @@ jobs:
     timeout-minutes: 25
     env:
       STARTUP_THRESHOLD_MS: ${{ secrets.STARTUP_THRESHOLD_MS }}
+      MAX_PSS_KB: ${{ secrets.MAX_PSS_KB }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -249,6 +250,32 @@ jobs:
             echo "startup_ms=${ms}" > perf_metrics.txt
           else
             echo "startup_ms=unknown" > perf_metrics.txt
+          fi
+          echo "Collecting memory info" >> perf_metrics.txt
+          adb shell dumpsys meminfo com.redping.redping > meminfo.txt || true
+          pss=$(grep -E 'TOTAL' meminfo.txt | awk '{print $2}' | head -n1)
+          if [ -n "$pss" ]; then echo "total_pss_kb=${pss}" >> perf_metrics.txt; else echo "total_pss_kb=unknown" >> perf_metrics.txt; fi
+          cpuLine=$(adb shell dumpsys cpuinfo | grep -E 'com.redping.redping' | head -n1 || true)
+          if [ -n "$cpuLine" ]; then echo "cpu_info=${cpuLine}" >> perf_metrics.txt; fi
+
+      - name: Enforce memory threshold
+        if: success()
+        shell: bash
+        run: |
+          max=${MAX_PSS_KB:-0}
+          if [ "$max" -gt 0 ]; then
+            pss=$(grep -E '^total_pss_kb=' perf_metrics.txt | cut -d'=' -f2)
+            if [ -n "$pss" ] && [ "$pss" != "unknown" ]; then
+              echo "PSS: ${pss} KB (limit ${max} KB)"
+              if [ "$pss" -gt "$max" ]; then
+                echo "Memory PSS ${pss}KB exceeded threshold ${max}KB" >&2
+                exit 1
+              fi
+            else
+              echo "No PSS parsed; skipping memory enforcement"
+            fi
+          else
+            echo "No memory threshold configured (MAX_PSS_KB not set)."
           fi
 
       - name: Upload perf metrics

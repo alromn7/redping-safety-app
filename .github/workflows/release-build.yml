@@ -176,10 +176,12 @@ jobs:
           path: checksums.txt
 
   device-smoke:
-    if: ${{ success() && secrets.DEVICE_SMOKE == 'true' }}
+    if: ${{ success() }}
     needs: build-release
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      STARTUP_THRESHOLD_MS: ${{ secrets.STARTUP_THRESHOLD_MS }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -211,10 +213,116 @@ jobs:
           name: device-smoke-logs
           path: smoke_log.txt
 
+      - name: Evaluate startup performance threshold
+        if: success()
+        shell: bash
+        run: |
+          set -e
+          threshold=${STARTUP_THRESHOLD_MS:-0}
+          echo "Configured threshold: ${threshold}ms"
+          if [ "$threshold" -gt 0 ]; then
+            line=$(grep -E 'Displayed com\.redping\.redping' smoke_log.txt || true)
+            if [ -n "$line" ]; then
+              echo "Startup line: $line"
+              ms=$(echo "$line" | sed -E 's/.*Displayed .* \(([0-9]+)ms\).*/\1/')
+              echo "Parsed startup time: ${ms}ms"
+              if [ -n "$ms" ] && [ "$ms" -gt "$threshold" ]; then
+                echo "Startup time ${ms}ms exceeded threshold ${threshold}ms" >&2
+                exit 1
+              else
+                echo "Startup time within threshold.";
+              fi
+            else
+              echo "No startup timing line found; skipping enforcement."
+            fi
+          else
+            echo "No threshold configured (STARTUP_THRESHOLD_MS not set)."
+          fi
+
+      - name: Extract perf metrics
+        if: always()
+        shell: bash
+        run: |
+          line=$(grep -E 'Displayed com\.redping\.redping' smoke_log.txt || true)
+          if [ -n "$line" ]; then
+            ms=$(echo "$line" | sed -E 's/.*Displayed .* \(([0-9]+)ms\).*/\1/')
+            echo "startup_ms=${ms}" > perf_metrics.txt
+          else
+            echo "startup_ms=unknown" > perf_metrics.txt
+          fi
+
+      - name: Upload perf metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-perf-metrics
+          path: perf_metrics.txt
+
       - name: Publish to Play (internal track)
-        if: success() && env.PLAY_PUBLISH == 'true' && env.PLAY_SERVICE_ACCOUNT_JSON_BASE64 != '' && !contains(github.ref_name,'-rc') && !contains(github.ref_name,'-dryrun')
+        if: false
+        shell: bash
+        run: echo "Deprecated step moved to publish-play job."
+
+  api-probe:
+    if: ${{ needs.build-release.result == 'success' }}
+    needs: build-release
+    runs-on: windows-latest
+    timeout-minutes: 5
+    env:
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run API probe
+        if: env.API_BASE_URL != ''
         shell: pwsh
         run: |
-          Write-Host 'Publishing bundle to Google Play internal track.'
+          powershell -ExecutionPolicy Bypass -File .\api_probe.ps1 -BaseUrl $Env:API_BASE_URL
+
+      - name: Upload API probe results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-probe-results
+          path: api_probe.json
+
+  publish-play:
+    if: ${{ needs.build-release.result == 'success' && needs.device-smoke.result == 'success' && needs.api-probe.result == 'success' }}
+    needs: [build-release, device-smoke, api-probe]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PLAY_PUBLISH: ${{ secrets.PLAY_PUBLISH }}
+      PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Decode Play service account (if provided)
+        if: env.PLAY_SERVICE_ACCOUNT_JSON_BASE64 != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path android\play | Out-Null
+          [IO.File]::WriteAllBytes('android/play/service-account.json',[Convert]::FromBase64String($Env:PLAY_SERVICE_ACCOUNT_JSON_BASE64))
+          Write-Host 'Play service account JSON decoded.'
+
+      - name: Download AAB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-release-aab
+          path: artifacts
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Publish to Play (internal track)
+        if: env.PLAY_PUBLISH == 'true'
+        shell: pwsh
+        run: |
+          Write-Host 'Publishing bundle to Google Play internal track (gated by previous job success).'
+          cd android
           ./gradlew :app:publishReleaseBundle --stacktrace
-        working-directory: android

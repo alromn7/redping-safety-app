@@ -3,7 +3,7 @@
 **Date:** November 25, 2025  
 **Time:** In Progress  
 **Device:** Pixel 7 Pro (Android 16, API 36)  
-**App Version:** 1.0.1+2  
+**App Version:** 1.0.1+3  
 **Bundle ID:** com.redping.redping
 
 ## Installation Status

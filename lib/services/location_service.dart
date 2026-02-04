@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import '../core/logging/app_logger.dart';
 import 'package:geolocator/geolocator.dart';
@@ -115,7 +116,47 @@ class LocationService {
 
   // Callbacks
   Function(LocationInfo)? _onLocationUpdate;
+  final List<Function(LocationInfo)> _locationListeners = [];
   Function(String)? _onLocationError;
+
+  // Debug/testing override for speed/altitude (useful for airplane-mode tests)
+  bool _debugOverrideEnabled = false;
+  double? _debugSpeedMps;
+  double? _debugAltitudeM;
+
+  /// Enable/disable debug override for speed/altitude. Optional values override live readings.
+  void setDebugOverride({
+    required bool enabled,
+    double? speedMps,
+    double? altitudeM,
+  }) {
+    _debugOverrideEnabled = enabled;
+    _debugSpeedMps = speedMps;
+    _debugAltitudeM = altitudeM;
+    if (kDebugMode) {
+      debugPrint(
+        'LocationService: Debug override ${enabled ? 'ENABLED' : 'DISABLED'} (speedMps=${speedMps?.toStringAsFixed(2)}, altitudeM=${altitudeM?.toStringAsFixed(0)})',
+      );
+    }
+
+    // If enabled and we have a current position, emit an immediate synthetic update
+    if (_debugOverrideEnabled && _currentPosition != null) {
+      final pos = _currentPosition!;
+      _emitLocationUpdate(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        altitude: _debugAltitudeM ?? pos.altitude,
+        speedMps: _debugSpeedMps ?? pos.speed,
+        accuracy: pos.accuracy,
+        heading: pos.heading,
+      );
+    }
+  }
+
+  // Debug override status (read-only)
+  bool get debugOverrideEnabled => _debugOverrideEnabled;
+  double? get debugOverrideSpeedMps => _debugSpeedMps;
+  double? get debugOverrideAltitudeM => _debugAltitudeM;
 
   /// Initialize location service and request permissions
   Future<bool> initialize() async {
@@ -153,15 +194,15 @@ class LocationService {
       _hasPermission = true;
       _isLocationServiceEnabled = true;
       AppLogger.i('Initialized successfully', tag: 'LocationService');
+
+      // Keep GPS tracking available regardless of connectivity to support
+      // in-flight and offline scenarios. If offline, ensure tracking is on;
+      // do not auto-stop on connectivity changes (explicit hibernate handles that).
       ConnectivityMonitorService().offlineStream.listen((isOffline) {
-        final sosActive = AppServiceManager().sosService.isSOSActive;
-        if (isOffline && (sosActive || _userRequestedLocationUpdates)) {
-          // Only update location when offline AND SOS is active or user requests
+        if (isOffline && !_isTracking) {
           _startLocationUpdates();
-        } else {
-          // Stop location updates otherwise
-          _stopLocationUpdates();
         }
+        // When coming online, keep current tracking state; no implicit stop.
       });
 
       return true;
@@ -183,22 +224,28 @@ class LocationService {
     }
 
     try {
-      final locationSettings = LocationSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 10, // Update every 10 meters
-        timeLimit: const Duration(seconds: 30),
-      );
+      // Prefer GPS-only on Android to avoid OS prompts to enable Wi‑Fi accuracy
+      final locationSettings = Platform.isAndroid
+          ? AndroidSettings(
+              accuracy: LocationAccuracy.bestForNavigation,
+              distanceFilter: 10,
+              // Use Android's LocationManager (GPS) instead of Fused Provider
+              forceLocationManager: true,
+            )
+          : const LocationSettings(
+              accuracy: LocationAccuracy.best,
+              distanceFilter: 10,
+            );
 
-      _positionSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: locationSettings,
-          ).listen(
-            _handlePositionUpdate,
-            onError: (error) {
-              debugPrint('LocationService: Position stream error - $error');
-              _onLocationError?.call('Location tracking error: $error');
-            },
-          );
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
+      ).listen(
+        _handlePositionUpdate,
+        onError: (error) {
+          debugPrint('LocationService: Position stream error - $error');
+          _onLocationError?.call('Location tracking error: $error');
+        },
+      );
 
       _isTracking = true;
       debugPrint('LocationService: Started tracking');
@@ -314,10 +361,34 @@ class LocationService {
     // Update sensor service with speed and altitude for airplane detection
     try {
       final sensorService = SensorService();
-      final speedKmh = position.speed * 3.6; // Convert m/s to km/h
+      // Compute speed fallback if provider does not supply speed
+      double? computedSpeedMps;
+      if (_breadcrumbTrail.isNotEmpty) {
+        final prev = _breadcrumbTrail.last;
+        final dtSeconds = DateTime.now().difference(prev.timestamp).inMilliseconds / 1000.0;
+        if (dtSeconds > 0) {
+          final distMeters = Geolocator.distanceBetween(
+            prev.latitude,
+            prev.longitude,
+            position.latitude,
+            position.longitude,
+          );
+          computedSpeedMps = distMeters / dtSeconds;
+        }
+      }
+
+        final rawSpeedMps = position.speed;
+        final effectiveSpeedMpsRaw = (rawSpeedMps > 0)
+          ? rawSpeedMps
+          : (computedSpeedMps ?? 0.0);
+      final effectiveSpeedMps =
+          _debugOverrideEnabled ? (_debugSpeedMps ?? effectiveSpeedMpsRaw) : effectiveSpeedMpsRaw;
+      final effectiveAltitudeM =
+          _debugOverrideEnabled ? (_debugAltitudeM ?? position.altitude) : position.altitude;
+      final speedKmh = effectiveSpeedMps * 3.6; // Convert m/s to km/h
       sensorService.updateLocationData(
         speed: speedKmh,
-        altitude: position.altitude,
+        altitude: effectiveAltitudeM,
       );
     } catch (e) {
       debugPrint('LocationService: Error updating sensor service - $e');
@@ -334,39 +405,150 @@ class LocationService {
     // Add to trail and limit size
     _addToBreadcrumbTrail(breadcrumbPoint);
 
-    // Get address (optional, may be slow)
-    String? address;
-    try {
-      final placemarks = await placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
-      if (placemarks.isNotEmpty) {
-        final placemark = placemarks.first;
-        address =
-            '${placemark.street}, ${placemark.locality}, ${placemark.country}';
+    // Create location info immediately (do not block on reverse geocoding).
+    // Reverse geocoding can hang/fail offline (airplane mode), which would
+    // otherwise delay SOS/status updates.
+    // Use the same effective speed as above when building LocationInfo
+    double effectiveSpeedForInfo;
+    {
+      double? computedSpeedMps;
+      if (_breadcrumbTrail.isNotEmpty) {
+        final prev = _breadcrumbTrail.last;
+        final dtSeconds = DateTime.now().difference(prev.timestamp).inMilliseconds / 1000.0;
+        if (dtSeconds > 0) {
+          final distMeters = Geolocator.distanceBetween(
+            prev.latitude,
+            prev.longitude,
+            position.latitude,
+            position.longitude,
+          );
+          computedSpeedMps = distMeters / dtSeconds;
+        }
       }
-    } catch (e) {
-      debugPrint('LocationService: Geocoding error - $e');
+      final rawSpeedMps = position.speed;
+      final effectiveSpeedMpsRaw = (rawSpeedMps > 0)
+          ? rawSpeedMps
+          : (computedSpeedMps ?? 0.0);
+      effectiveSpeedForInfo = _debugOverrideEnabled
+          ? (_debugSpeedMps ?? effectiveSpeedMpsRaw)
+          : effectiveSpeedMpsRaw;
     }
+    final effectiveAltitudeM2 =
+        _debugOverrideEnabled ? (_debugAltitudeM ?? position.altitude) : position.altitude;
 
-    // Create location info
-    _currentLocationInfo = LocationInfo(
+    final info = LocationInfo(
       latitude: position.latitude,
       longitude: position.longitude,
-      altitude: position.altitude,
+      altitude: effectiveAltitudeM2,
       accuracy: position.accuracy,
-      speed: position.speed,
+      speed: effectiveSpeedForInfo,
       heading: position.heading,
       timestamp: DateTime.now(),
-      address: address,
+      address: _currentLocationInfo?.address,
       breadcrumbTrail: List.from(_breadcrumbTrail),
     );
+    _currentLocationInfo = info;
+    _lastLocationUpdate = DateTime.now();
 
     debugPrint(
       'LocationService: Location updated - ${position.latitude}, ${position.longitude}',
     );
     _onLocationUpdate?.call(_currentLocationInfo!);
+    // Notify all listeners
+    for (final listener in List<Function(LocationInfo)>.from(_locationListeners)) {
+      try {
+        listener(_currentLocationInfo!);
+      } catch (e) {
+        debugPrint('LocationService: Listener error - $e');
+      }
+    }
+
+    // Reverse geocode in background when online.
+    _maybeUpdateAddressAsync(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      capturedAt: _currentLocationInfo!.timestamp,
+    );
+  }
+
+  bool get _skipReverseGeocoding =>
+      ConnectivityMonitorService().isEffectivelyOffline;
+
+  void _maybeUpdateAddressAsync({
+    required double latitude,
+    required double longitude,
+    required DateTime capturedAt,
+  }) {
+    if (_skipReverseGeocoding) return;
+
+    Future.microtask(() async {
+      try {
+        final placemarks = await placemarkFromCoordinates(
+          latitude,
+          longitude,
+        ).timeout(const Duration(seconds: 3));
+        if (placemarks.isEmpty) return;
+        final placemark = placemarks.first;
+        final address =
+            '${placemark.street}, ${placemark.locality}, ${placemark.country}';
+
+        final current = _currentLocationInfo;
+        if (current == null) return;
+
+        // Only update if we are still on the same reading (avoid racing).
+        final sameFix = (current.timestamp == capturedAt) &&
+            (current.latitude == latitude) &&
+            (current.longitude == longitude);
+        if (!sameFix) return;
+
+        if (address.trim().isEmpty) return;
+        if (current.address == address) return;
+
+        _currentLocationInfo = current.copyWith(address: address);
+        _onLocationUpdate?.call(_currentLocationInfo!);
+        for (final listener in List<Function(LocationInfo)>.from(_locationListeners)) {
+          try {
+            listener(_currentLocationInfo!);
+          } catch (_) {}
+        }
+      } catch (e) {
+        // Non-fatal: reverse geocoding often fails offline/captive portal.
+        if (kDebugMode) {
+          debugPrint('LocationService: Reverse geocoding skipped/failed - $e');
+        }
+      }
+    });
+  }
+
+  /// Emit a synthetic location update to listeners (used for debug override)
+  void _emitLocationUpdate({
+    required double latitude,
+    required double longitude,
+    required double altitude,
+    required double speedMps,
+    required double accuracy,
+    required double heading,
+  }) {
+    _currentLocationInfo = LocationInfo(
+      latitude: latitude,
+      longitude: longitude,
+      altitude: altitude,
+      accuracy: accuracy,
+      speed: speedMps,
+      heading: heading,
+      timestamp: DateTime.now(),
+      address: _currentLocationInfo?.address,
+      breadcrumbTrail: List.from(_breadcrumbTrail),
+    );
+
+    _onLocationUpdate?.call(_currentLocationInfo!);
+    for (final listener in List<Function(LocationInfo)>.from(_locationListeners)) {
+      try {
+        listener(_currentLocationInfo!);
+      } catch (e) {
+        debugPrint('LocationService: Listener error - $e');
+      }
+    }
   }
 
   /// Add point to breadcrumb trail
@@ -417,27 +599,69 @@ class LocationService {
     }
 
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: highAccuracy
-            ? LocationAccuracy.best
-            : LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10), // Reduced timeout
-      );
-
-      // Get address
-      String? address;
-      try {
-        final placemarks = await placemarkFromCoordinates(
-          position.latitude,
-          position.longitude,
+      // Fast path: last known position helps in airplane mode where a fresh
+      // GPS fix may take longer than typical timeouts.
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (!forceFresh && lastKnown != null) {
+        final info = LocationInfo(
+          latitude: lastKnown.latitude,
+          longitude: lastKnown.longitude,
+          altitude: lastKnown.altitude,
+          accuracy: lastKnown.accuracy,
+          speed: lastKnown.speed,
+          heading: lastKnown.heading,
+          timestamp: DateTime.now(),
+          address: _currentLocationInfo?.address,
+          breadcrumbTrail: List.from(_breadcrumbTrail),
         );
-        if (placemarks.isNotEmpty) {
-          final placemark = placemarks.first;
-          address =
-              '${placemark.street}, ${placemark.locality}, ${placemark.country}';
+        _currentLocationInfo = info;
+        _lastLocationUpdate = DateTime.now();
+      }
+
+      final offline = ConnectivityMonitorService().isEffectivelyOffline;
+      final timeout =
+          offline ? const Duration(seconds: 35) : const Duration(seconds: 12);
+
+      Position position;
+      if (Platform.isAndroid) {
+        // Use GPS-only stream on Android (LocationManager) to work reliably in
+        // airplane mode/offline and avoid Wi‑Fi accuracy prompts.
+        final settings = AndroidSettings(
+          accuracy: highAccuracy
+              ? LocationAccuracy.bestForNavigation
+              : LocationAccuracy.high,
+          distanceFilter: 0,
+          forceLocationManager: true,
+          intervalDuration: const Duration(seconds: 1),
+        );
+        position = await _firstPositionFromStream(settings, timeout: timeout);
+      } else {
+        position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: highAccuracy
+              ? LocationAccuracy.bestForNavigation
+              : LocationAccuracy.high,
+          timeLimit: timeout,
+        );
+      }
+
+      // Address is optional and should not block offline/flight-mode usage.
+      String? address;
+      if (!offline) {
+        try {
+          final placemarks = await placemarkFromCoordinates(
+            position.latitude,
+            position.longitude,
+          ).timeout(const Duration(seconds: 3));
+          if (placemarks.isNotEmpty) {
+            final placemark = placemarks.first;
+            address =
+                '${placemark.street}, ${placemark.locality}, ${placemark.country}';
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('LocationService: Geocoding skipped/failed - $e');
+          }
         }
-      } catch (e) {
-        debugPrint('LocationService: Geocoding error - $e');
       }
 
       final locationInfo = LocationInfo(
@@ -461,7 +685,36 @@ class LocationService {
     } catch (e) {
       debugPrint('LocationService: Error getting current location - $e');
       _onLocationError?.call('Failed to get current location: $e');
-      return null;
+      // Last resort: return any cached location we might have.
+      return _currentLocationInfo;
+    }
+  }
+
+  Future<Position> _firstPositionFromStream(
+    LocationSettings settings, {
+    required Duration timeout,
+  }) async {
+    final completer = Completer<Position>();
+    late final StreamSubscription<Position> sub;
+    sub = Geolocator.getPositionStream(locationSettings: settings).listen(
+      (p) {
+        if (!completer.isCompleted) {
+          completer.complete(p);
+          sub.cancel();
+        }
+      },
+      onError: (e) {
+        if (!completer.isCompleted) {
+          completer.completeError(e);
+        }
+        sub.cancel();
+      },
+    );
+
+    try {
+      return await completer.future.timeout(timeout);
+    } finally {
+      await sub.cancel();
     }
   }
 
@@ -585,6 +838,16 @@ class LocationService {
     _onLocationUpdate = callback;
   }
 
+  /// Add a listener to receive location updates (multiple subscribers supported)
+  void addLocationListener(Function(LocationInfo) listener) {
+    _locationListeners.add(listener);
+  }
+
+  /// Remove a previously added location listener
+  void removeLocationListener(Function(LocationInfo) listener) {
+    _locationListeners.remove(listener);
+  }
+
   void setLocationErrorCallback(Function(String) callback) {
     _onLocationError = callback;
   }
@@ -634,7 +897,8 @@ class LocationService {
       // STEP 5: Permission granted, get location
       debugPrint('LocationService: Permission granted, getting location...');
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        // Use GPS-first accuracy to avoid Wi‑Fi accuracy prompts
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
         timeLimit: const Duration(seconds: 10),
       );
 
@@ -752,6 +1016,30 @@ class LocationService {
       }
     } catch (e) {
       debugPrint('LocationService: Failed to open map search - $e');
+    }
+  }
+
+  /// Best-effort ISO country code lookup from the current GPS position.
+  ///
+  /// Uses native reverse geocoding (Placemark.isoCountryCode). This may fail
+  /// offline/captive portal and should be treated as optional.
+  Future<String?> getCurrentIsoCountryCodeBestEffort({
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    try {
+      final pos = _currentPosition;
+      if (pos == null) return null;
+
+      final placemarks = await placemarkFromCoordinates(
+        pos.latitude,
+        pos.longitude,
+      ).timeout(timeout);
+      if (placemarks.isEmpty) return null;
+      final iso = placemarks.first.isoCountryCode;
+      if (iso == null || iso.trim().isEmpty) return null;
+      return iso.trim();
+    } catch (_) {
+      return null;
     }
   }
 
@@ -908,12 +1196,22 @@ class LocationService {
   /// Allow user to manually request location updates
   void setUserRequestedLocationUpdates(bool requested) {
     _userRequestedLocationUpdates = requested;
-    final isOffline = true; // Should be set based on actual connectivity status
+    final isOffline = ConnectivityMonitorService().isOffline;
     final sosActive = AppServiceManager().sosService.isSOSActive;
-    if (isOffline && (sosActive || _userRequestedLocationUpdates)) {
+
+    // If the user requested or SOS is active, ensure tracking is running.
+    if (sosActive || _userRequestedLocationUpdates) {
       _startLocationUpdates();
-    } else {
-      _stopLocationUpdates();
+      return;
     }
+
+    // If offline, prefer keeping tracking on to provide speed/altitude.
+    if (isOffline && !_isTracking) {
+      _startLocationUpdates();
+      return;
+    }
+
+    // Otherwise, leave current state as-is. Explicit calls to hibernate()/stopTracking()
+    // manage battery-saving pauses when the app is inactive.
   }
 }

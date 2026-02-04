@@ -13,7 +13,6 @@ import 'user_profile_service.dart';
 import 'sensor_service.dart';
 import 'connectivity_monitor_service.dart';
 import 'app_service_manager.dart';
-import 'feature_access_service.dart';
 
 /// Service for managing gadget device integration and synchronization
 class GadgetIntegrationService {
@@ -40,8 +39,6 @@ class GadgetIntegrationService {
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
   final Connectivity _connectivity = Connectivity();
   final Battery _battery = Battery();
-  final FeatureAccessService _featureAccessService =
-      FeatureAccessService.instance;
 
   List<GadgetDevice> _registeredDevices = [];
   List<GadgetDeviceStats> _deviceStats = [];
@@ -69,18 +66,6 @@ class GadgetIntegrationService {
   /// Initialize the gadget integration service
   Future<void> initialize() async {
     if (_isInitialized) return;
-
-    // 🔒 SUBSCRIPTION GATE: Gadget Integration requires Pro or above
-    if (!_featureAccessService.hasFeatureAccess('gadgetIntegration')) {
-      debugPrint(
-        '⚠️ GadgetIntegrationService: Gadget Integration not available - Requires Pro plan',
-      );
-      debugPrint(
-        '   Upgrade to Pro for Smartwatch, Car & IoT Device Integration',
-      );
-      _isInitialized = true; // Mark as initialized but don't start integration
-      return;
-    }
 
     try {
       await _loadRegisteredDevices();
@@ -424,6 +409,33 @@ class GadgetIntegrationService {
       debugPrint('GadgetIntegrationService: Device removed - $deviceId');
     } catch (e) {
       debugPrint('GadgetIntegrationService: Error removing device - $e');
+      rethrow;
+    }
+  }
+
+  /// Update a device
+  Future<void> updateDevice(GadgetDevice updatedDevice) async {
+    try {
+      final deviceIndex = _registeredDevices.indexWhere(
+        (d) => d.id == updatedDevice.id,
+      );
+      if (deviceIndex == -1) {
+        throw Exception('Device not found');
+      }
+
+      // Update the device in the list
+      _registeredDevices[deviceIndex] = updatedDevice.copyWith(
+        updatedAt: DateTime.now(),
+      );
+
+      await _saveRegisteredDevices();
+      _deviceUpdateController.add(_registeredDevices[deviceIndex]);
+
+      debugPrint(
+        'GadgetIntegrationService: Device updated - ${updatedDevice.id}',
+      );
+    } catch (e) {
+      debugPrint('GadgetIntegrationService: Error updating device - $e');
       rethrow;
     }
   }

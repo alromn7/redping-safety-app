@@ -6,7 +6,7 @@ class ServicesNetworkAnalysis {
       'core_services': _analyzeCoreServices(),
       'messaging_services': _analyzeMessagingServices(),
       'location_services': _analyzeLocationServices(),
-      'ai_services': _analyzeAIServices(),
+      'help_services': _analyzeHelpServices(),
       'sar_services': _analyzeSARServices(),
       'optimization_services': _analyzeOptimizationServices(),
       'network_connectivity': _analyzeNetworkConnectivity(),
@@ -177,35 +177,9 @@ class ServicesNetworkAnalysis {
     };
   }
 
-  /// AI and assistant services
-  static Map<String, dynamic> _analyzeAIServices() {
+  /// Help-related services
+  static Map<String, dynamic> _analyzeHelpServices() {
     return {
-      'ai_assistant_service': {
-        'status': '✅ Active',
-        'network': 'AI APIs + Local Processing',
-        'dependencies': ['AI APIs', 'UserProfileService'],
-        'functionality': [
-          'AI-powered assistance',
-          'Natural language processing',
-          'Emergency response suggestions',
-          'Context-aware help',
-          'AI conversation management',
-        ],
-        'network_wiring': 'AI service APIs + local AI processing capabilities',
-      },
-      'ai_verification_service': {
-        'status': '✅ Active',
-        'network': 'AI Verification APIs',
-        'dependencies': ['AI APIs', 'SensorService'],
-        'functionality': [
-          'AI-powered verification',
-          'Emergency situation analysis',
-          'False alarm prevention',
-          'AI-based validation',
-          'Smart emergency detection',
-        ],
-        'network_wiring': 'AI verification APIs for emergency validation',
-      },
       'help_assistant_service': {
         'status': '✅ Active',
         'network': 'Help System + Knowledge Base',
@@ -403,7 +377,7 @@ class ServicesNetworkAnalysis {
         'services': [
           'Geocoding API',
           'Satellite Communication APIs',
-          'AI Service APIs',
+          'Support Service APIs',
           'SAR Network APIs',
         ],
         'network_wiring':
@@ -440,11 +414,6 @@ class ServicesNetworkAnalysis {
           'SARIdentityService',
         ],
       },
-      'ai_dependencies': {
-        'ai_assistant_service': ['AI APIs', 'UserProfileService'],
-        'ai_verification_service': ['AI APIs', 'SensorService'],
-        'help_assistant_service': ['UserProfileService', 'LocationService'],
-      },
       'sar_dependencies': {
         'sar_service': ['Firebase Firestore', 'LocationService'],
         'sar_identity_service': ['Firebase Firestore', 'UserProfileService'],
@@ -476,8 +445,6 @@ class ServicesNetworkAnalysis {
       ],
       'partially_integrated': [
         'RedPingDataConnectService',
-        'AIAssistantService',
-        'AIVerificationService',
         'HelpAssistantService',
       ],
       'network_ready': [
@@ -523,11 +490,6 @@ class ServicesNetworkAnalysis {
 ├── Satellite Service → Satellite Communication APIs
 └── Breadcrumb Trail → Local Storage + GPS Tracking
 
-🤖 AI SERVICES NETWORK:
-├── AI Assistant Service → AI APIs + Local Processing
-├── AI Verification Service → AI Verification APIs
-└── Help Assistant Service → Knowledge Base APIs
-
 🚁 SAR SERVICES NETWORK:
 ├── SAR Service → SAR Network APIs + Firebase
 ├── SAR Identity Service → SAR Identity Management + Firebase Auth
@@ -549,7 +511,7 @@ class ServicesNetworkAnalysis {
 
 ✅ INTEGRATION STATUS:
 ├── Fully Integrated: 7 core services
-├── Partially Integrated: 4 AI/Data services  
+├── Partially Integrated: 2 supporting services
 ├── Network Ready: 4 Firebase services
 ├── Offline Capable: 4 essential services
 └── Cross-Device Enabled: 4 messaging services
@@ -558,7 +520,7 @@ class ServicesNetworkAnalysis {
 ├── Real-time cross-device communication
 ├── Offline-first architecture
 ├── Firebase cloud synchronization
-├── AI-powered assistance
+├── In-app help and guidance
 ├── SAR network integration
 ├── Emergency response coordination
 └── Performance optimization

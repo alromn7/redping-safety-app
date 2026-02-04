@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:redping_14v/models/verification_result.dart';
+import 'package:redping_14v/models/detection_context.dart';
 import 'package:redping_14v/services/incident_escalation_coordinator.dart';
 import 'package:redping_14v/models/sos_session.dart';
 
@@ -60,15 +60,11 @@ void main() {
         );
         coordinator.detectionWindowStarted(ctx);
 
-        // Emit a noResponse verification result
-        final result = VerificationResult(
-          outcome: VerificationOutcome.noResponse,
-          confidence: 0.4,
-          reason: 'User did not respond',
+        // Schedule fallback (heuristic no-response escalation)
+        coordinator.scheduleFallback(
           context: ctx,
+          reasonCode: 'Fallback_NoResponse',
         );
-
-        coordinator.handleVerificationResult(result);
 
         // Wait > fallback window
         await Future.delayed(const Duration(milliseconds: 120));

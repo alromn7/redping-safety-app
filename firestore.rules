@@ -1,6 +1,43 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Check-In Ping Requests
+    match /check_in_requests/{requestId} {
+      // Create: requester must be authenticated and can only set whitelisted fields.
+      allow create: if request.auth != null
+        && request.resource.data.requesterUserId == request.auth.uid
+        && request.resource.data.familyId is string
+        && request.resource.data.targetUserId is string
+        && request.resource.data.status == 'pending'
+        && request.resource.data.diff({}).addedKeys().hasOnly(['familyId','requesterUserId','targetUserId','status','reason','autoApproved','expiresAt','createdAt'])
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.targetUserId))
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.familyId == request.resource.data.familyId
+        && get(/databases/$(database)/documents/users/$(request.resource.data.targetUserId)).data.familyId == request.resource.data.familyId;
+
+      allow get, list: if request.auth != null && (
+        resource.data.requesterUserId == request.auth.uid ||
+        resource.data.targetUserId == request.auth.uid
+      );
+
+      allow update: if request.auth != null && (
+        // Target responding with location or denial
+        (resource.data.targetUserId == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status in ['locationShared','denied'] &&
+          // Only allow specific fields to change on response
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','respondedAt','locationSnapshot']))
+        // System expiration (could be via privileged function/service account)
+        || (request.auth.token.admin == true)
+      );
+      allow delete: if false; // Immutable retention until server cleanup
+    }
+
+    // Allow check-in analytics events create (read restricted to admin via broader analytics rule)
+    match /analytics/check_in_events/{docId} {
+      allow create: if request.auth != null; // writes from functions/client if allowed
+      allow read, update, delete: if isAdmin();
+    }
     
     // Helper functions
     function isAuthenticated() {
@@ -12,24 +49,51 @@ service cloud.firestore {
     }
     
     function isSARMember() {
-      return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['SAR_MEMBER', 'SAR_LEADER', 'ADMIN']);
+      return isAuthenticated() && (
+        // Check custom claims first (faster, no DB read)
+        request.auth.token.get('sarMember', false) == true ||
+        request.auth.token.get('sarLeader', false) == true ||
+        request.auth.token.get('admin', false) == true ||
+        // Fallback to user document roles
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['SAR_MEMBER', 'SAR_LEADER', 'ADMIN']))
+      );
+    }
+    
+    // Check if user has SAR Dashboard access (membership or admin)
+    function hasSARDashboardAccess() {
+      return isAuthenticated() && (
+        isSARMember() || isAdmin()
+      );
     }
     
     function isSARLeader() {
-      return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['SAR_LEADER', 'ADMIN']);
+      return isAuthenticated() && (
+        // Check custom claims first
+        request.auth.token.get('sarLeader', false) == true ||
+        request.auth.token.get('admin', false) == true ||
+        // Fallback to user document roles
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['SAR_LEADER', 'ADMIN']))
+      );
     }
     
     function isAdmin() {
-      return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['ADMIN', 'SUPER_ADMIN']);
+      return isAuthenticated() && (
+        // Check custom claims first (most reliable for admin)
+        request.auth.token.get('admin', false) == true ||
+        request.auth.token.admin == true ||
+        // Developer email is admin
+        request.auth.token.email == 'alromn7@gmail.com' ||
+        // Fallback to user document roles
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roles', []).hasAny(['ADMIN', 'SUPER_ADMIN']))
+      );
     }
     
     // Coordinators are SAR leaders or admins
     function isCoordinator() {
-      return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.hasAny(['SAR_LEADER', 'ADMIN']);
+      return isSARLeader() || isAdmin();
     }
     
     // Users collection
@@ -42,21 +106,56 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         allow write: if isOwner(userId) || isAdmin();
       }
+
+      // RedPing Doctor: Medical data (owner-only access)
+      // Structure used by the app:
+      // - users/{uid}/medical/profile (document)
+      // - users/{uid}/medical/profile/medications/{medId}
+      // - users/{uid}/medical/profile/appointments/{appointmentId}
+      // - users/{uid}/medical/external_coverage/{docId}
+      // Grant read/write strictly to the owning user (and admins via parent rule)
+      match /medical/{document=**} {
+        allow read, write: if isOwner(userId);
+      }
     }
     
+    // Helper: who can view a specific SOS session (by data object)
+    function canViewSosData(data) {
+      return isAuthenticated() && (
+        // Owner can view
+        data.userId == request.auth.uid ||
+        // SAR members/leaders/admins can view
+        isSARMember() || isCoordinator() || isAdmin() ||
+        // Explicitly allowed viewers by UID
+        (data.get('allowedViewerIds', []).size() > 0 &&
+         request.auth.uid in data.get('allowedViewerIds', [])) ||
+        // Explicitly allowed viewers by email (for emergency contacts)
+        (
+          request.auth.token.email != null &&
+          data.get('allowedViewerEmails', []).size() > 0 &&
+          data.get('allowedViewerEmails', []).hasAny([request.auth.token.email])
+        )
+      );
+    }
+
+    // Helper: who can view a specific SOS session (by id)
+    function canViewSosById(sessionId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/sos_sessions/$(sessionId)) &&
+        canViewSosData(get(/databases/$(database)/documents/sos_sessions/$(sessionId)).data);
+    }
+
     // SOS Sessions collection (primary source of truth)
-    // Note: Kept permissive read for all authenticated users to avoid breaking current flows.
-    // Gradually enforce stricter updates as subcollections (locations/events) are adopted.
     match /sos_sessions/{sessionId} {
-      // Read: authenticated users can read; coordinators and owners will be further scoped in future tightening
-      allow read: if isAuthenticated();
+      // Read: restricted to owner, SAR, admins, and explicitly allowed contacts
+      allow read: if canViewSosData(resource.data);
 
       // Create: only the authenticated owner can create their session
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
 
-      // Update: owner or coordinator can update for now (field-level constraints to be added when client is ready)
+      // Update: owner, coordinator, or admin can update
       allow update: if isAuthenticated() && (
-        request.auth.uid == resource.data.userId || isCoordinator()
+        request.auth.uid == resource.data.userId || isCoordinator() || isAdmin()
       );
 
       // Delete: only admins can delete (for cleanup)
@@ -65,16 +164,16 @@ service cloud.firestore {
 
     // Subcollections for durability pattern
     match /sos_sessions/{sessionId}/locations/{docId} {
-      // Owner can write pings; coordinators and owners can read
+      // Owner can write pings; reads restricted to viewers of the parent SOS
       allow create: if isAuthenticated() &&
         get(/databases/$(database)/documents/sos_sessions/$(sessionId)).data.userId == request.auth.uid;
-      allow read: if isAuthenticated();
+      allow read: if canViewSosById(sessionId);
       allow update, delete: if false; // immutable pings; add admin cleanup if needed
     }
 
     match /sos_sessions/{sessionId}/events/{docId} {
-      // Coordinators write events (status changes, notes); all authenticated can read for transparency/logs
-      allow read: if isAuthenticated();
+      // Coordinators write events; reads restricted to viewers of the parent SOS
+      allow read: if canViewSosById(sessionId);
       allow create: if isCoordinator();
       allow update, delete: if false;
     }
@@ -126,16 +225,16 @@ service cloud.firestore {
     
     // SAR Members collection
     match /sar_members/{memberId} {
-      allow read: if isAuthenticated() && isSARMember();
+      allow read: if isAuthenticated() && hasSARDashboardAccess();
       allow write: if isSARLeader() || isAdmin();
     }
 
     // SAR Messages (PRODUCTION)
     match /sar_messages/{messageId} {
-      // Only SAR members can read messages
-      allow read: if isAuthenticated() && isSARMember();
-      // Only SAR members can create messages
-      allow create: if isAuthenticated() && isSARMember() && 
+      // SAR members or Pro/Ultra subscribers can read messages
+      allow read: if isAuthenticated() && hasSARDashboardAccess();
+      // SAR members or Pro/Ultra subscribers can create messages
+      allow create: if isAuthenticated() && hasSARDashboardAccess() && 
         request.resource.data.senderId == request.auth.uid;
       // Sender can update their own message (for edits)
       allow update: if isAuthenticated() && resource.data.senderId == request.auth.uid;
@@ -189,7 +288,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     
-    // Analytics and logs (admin only)
+    // Analytics and logs (admin only, with limited client create for SOS events)
+    
+    // Allow authenticated clients to CREATE SOS analytics events
+    // Reads/updates/deletes remain restricted to admins.
+    match /analytics/sos_events/{subcollection}/{docId} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Admin-only analytics (all other analytics paths)
     match /analytics/{document=**} {
       allow read, write: if isAdmin();
     }
@@ -204,9 +312,9 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       // Only authenticated users can create requests
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      // Only owner or SAR members can update
+      // Only owner, SAR members, or Pro/Ultra subscribers can update
       allow update: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || isSARMember()
+        resource.data.userId == request.auth.uid || hasSARDashboardAccess()
       );
       // Only admins can delete
       allow delete: if isAdmin();
@@ -215,8 +323,14 @@ service cloud.firestore {
     match /help_responses/{responseId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && isSARMember();
+      allow update: if isAuthenticated() && hasSARDashboardAccess();
       allow delete: if isAdmin();
+    }
+    
+    // SAR Sessions - Restricted to SAR members/leaders/admins
+    match /sar_sessions/{sessionId} {
+      allow read: if isAuthenticated() && (isSARMember() || isCoordinator() || isAdmin());
+      allow write: if isAuthenticated() && hasSARDashboardAccess();
     }
     
     // Default deny all other collections

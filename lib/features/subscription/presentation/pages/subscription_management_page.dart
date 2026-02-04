@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../services/subscription_service.dart';
 import '../../../../services/payment_service.dart';
@@ -99,7 +100,17 @@ class _SubscriptionManagementPageState extends State<SubscriptionManagementPage>
     setState(() => _isCancelling = true);
 
     try {
-      await _paymentService.cancelSubscription('current_user');
+      if (_subscription == null) {
+        throw Exception('No active subscription found');
+      }
+
+      // Get actual user ID from Firebase Auth
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      await _paymentService.cancelSubscription(user.uid, _subscription!.id);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -361,7 +372,10 @@ class _SubscriptionManagementPageState extends State<SubscriptionManagementPage>
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _getTierColor().withValues(alpha: 0.5), width: 1),
+        border: Border.all(
+          color: _getTierColor().withValues(alpha: 0.5),
+          width: 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

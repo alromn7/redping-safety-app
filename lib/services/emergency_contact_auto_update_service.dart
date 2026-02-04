@@ -53,7 +53,7 @@ class EmergencyContact {
       '$name ($phoneNumber) - ${distance != null ? "${distance!.toStringAsFixed(1)}km away" : type}';
 }
 
-/// AI-powered emergency contact auto-update service
+/// Emergency contact auto-update service
 /// Automatically finds and updates emergency contact numbers based on user location
 class EmergencyContactAutoUpdateService {
   static final EmergencyContactAutoUpdateService _instance =
@@ -102,7 +102,7 @@ class EmergencyContactAutoUpdateService {
   ) async {
     try {
       AppLogger.i(
-        '🔍 AI: Auto-updating emergency contacts for location (${location.latitude}, ${location.longitude})',
+        '🔍 Auto-updating emergency contacts for location (${location.latitude}, ${location.longitude})',
         tag: 'EmergencyContactService',
       );
 

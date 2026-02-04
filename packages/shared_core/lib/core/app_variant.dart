@@ -1,0 +1,4 @@
+enum AppVariant {
+  emergency,
+  sar,
+}

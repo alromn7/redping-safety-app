@@ -7,9 +7,16 @@ Certificate (current):
 
 ## 1. Pre-tag Sanity
 - [ ] Working branch is `main` and clean (`git status` has no changes).
-- [ ] `flutter build apk --release` succeeds locally.
+- [ ] `flutter build apk --release --flavor sos -t lib/main_sos.dart` succeeds locally.
+- [ ] `flutter build apk --release --flavor sar -t lib/main_sar.dart` succeeds locally.
 - [ ] Local APK signature shows CN=Redping (no "Android Debug").
 - [ ] Key passwords rotated & stored securely in secret manager.
+
+Note: This repo builds multiple Android flavors (e.g. `sos`, `sar`). A plain
+`flutter build apk --release` may succeed in Gradle but Flutter may not locate the
+APK under the default `app-release.apk` name. Expected outputs:
+- `build/app/outputs/apk/sos/release/app-sos-release.apk`
+- `build/app/outputs/apk/sar/release/app-sar-release.apk`
 
 ## 2. Create Annotated Tag
 ```
@@ -42,6 +49,16 @@ C:\Users\<you>\AppData\Local\Android\Sdk\build-tools\36.0.0\apksigner.bat verify
 ```
 Ensure output SHA-256 matches `53b37f0b16d52918a6c4d0477200a3214b334f5fd36d1467768a05574215f469`.
 - [ ] Confirm no fallback to debug certificate (CN=Android Debug should NOT appear).
+
+## 4a. Latest Local Verification (2026-02-04)
+Artifacts found under `build/app/outputs/apk/...`:
+- SOS: `build/app/outputs/apk/sos/release/app-sos-release.apk`
+- SAR: `build/app/outputs/apk/sar/release/app-sar-release.apk`
+
+`apksigner verify --print-certs` results (SOS + SAR):
+- DN: `CN=Redping, O=Redping, L=City, ST=State, C=US`
+- SHA-256: `53b37f0b16d52918a6c4d0477200a3214b334f5fd36d1467768a05574215f469`
+- SHA-1: `406fc289d379cd0a22d7329a607abc7e91733b8a`
 
 ## 5. Fingerprint Archival
 Append/update fingerprints in `SIGNING_FINGERPRINTS.md` (create if missing):

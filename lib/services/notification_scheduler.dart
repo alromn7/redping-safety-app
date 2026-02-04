@@ -8,6 +8,7 @@ import '../models/sos_session.dart';
 import 'package:intl/intl.dart';
 import 'sos_analytics_service.dart';
 import 'adaptive_sound_service.dart';
+import '../config/env.dart';
 
 /// Push Notification Scheduler for emergency escalation
 /// Implements smart notification timing based on SOS status
@@ -242,13 +243,16 @@ class NotificationScheduler {
     );
 
     // Local notification
+    final enableSounds = Env.flag<bool>('enableNotificationSounds', false);
     final androidDetails = AndroidNotificationDetails(
       'sos_active',
       'SOS Active Alerts',
       channelDescription: 'Critical emergency alerts for active SOS sessions',
       importance: Importance.max,
       priority: Priority.max,
-      sound: RawResourceAndroidNotificationSound(soundFilename),
+      sound: enableSounds
+          ? RawResourceAndroidNotificationSound(soundFilename)
+          : null,
       playSound: true,
       enableVibration: true,
       vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]),
@@ -258,12 +262,11 @@ class NotificationScheduler {
       ongoing: true,
       autoCancel: false,
     );
-
     final iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
-      presentSound: true,
-      sound: '$soundFilename.aiff',
+      presentSound: enableSounds,
+      sound: enableSounds ? '$soundFilename.aiff' : null,
       interruptionLevel: InterruptionLevel.critical,
       categoryIdentifier: 'SOS_ACTIVE',
     );
@@ -299,26 +302,28 @@ class NotificationScheduler {
         session.metadata['assignedSARName'] as String? ?? 'SAR Team';
     final timestamp = DateFormat('h:mm a').format(DateTime.now());
 
-    const androidDetails = AndroidNotificationDetails(
+    final enableSounds = Env.flag<bool>('enableNotificationSounds', false);
+    final androidDetails = AndroidNotificationDetails(
       'sos_acknowledged',
       'SOS Update Alerts',
       channelDescription: 'Update alerts for acknowledged SOS sessions',
       importance: Importance.high,
       priority: Priority.high,
-      sound: RawResourceAndroidNotificationSound('notification_sound'),
+      sound: enableSounds
+          ? const RawResourceAndroidNotificationSound('notification_sound')
+          : null,
       playSound: true,
       enableVibration: true,
       category: AndroidNotificationCategory.status,
     );
-
-    const iosDetails = DarwinNotificationDetails(
+    final iosDetails = const DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
       interruptionLevel: InterruptionLevel.active,
     );
 
-    const details = NotificationDetails(
+    final details = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
     );
@@ -348,26 +353,28 @@ class NotificationScheduler {
     final timestamp = DateFormat('h:mm a').format(DateTime.now());
     final duration = DateTime.now().difference(session.startTime).inMinutes;
 
-    const androidDetails = AndroidNotificationDetails(
+    final enableSounds = Env.flag<bool>('enableNotificationSounds', false);
+    final androidDetails = AndroidNotificationDetails(
       'sos_resolved',
       'SOS Resolved',
       channelDescription: 'Final notifications for resolved SOS sessions',
       importance: Importance.defaultImportance,
       priority: Priority.defaultPriority,
-      sound: RawResourceAndroidNotificationSound('success_chime'),
+      sound: enableSounds
+          ? const RawResourceAndroidNotificationSound('success_chime')
+          : null,
       playSound: true,
       category: AndroidNotificationCategory.status,
       autoCancel: true,
     );
-
-    const iosDetails = DarwinNotificationDetails(
+    final iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
-      presentSound: true,
-      sound: 'success_chime.aiff',
+      presentSound: enableSounds,
+      sound: enableSounds ? 'success_chime.aiff' : null,
     );
 
-    const details = NotificationDetails(
+    final details = NotificationDetails(
       android: androidDetails,
       iOS: iosDetails,
     );
@@ -402,13 +409,16 @@ class NotificationScheduler {
       });
 
       // Send critical escalation notification
+      final enableSounds = Env.flag<bool>('enableNotificationSounds', false);
       final androidDetails = AndroidNotificationDetails(
         'sos_escalation',
         'SOS Escalation',
         channelDescription: 'Critical escalation alerts',
         importance: Importance.max,
         priority: Priority.max,
-        sound: const RawResourceAndroidNotificationSound('emergency_siren'),
+        sound: enableSounds
+            ? const RawResourceAndroidNotificationSound('emergency_siren')
+            : null,
         playSound: true,
         enableVibration: true,
         vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 500]),

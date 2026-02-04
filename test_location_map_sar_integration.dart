@@ -35,8 +35,7 @@ class LocationMapSARIntegrationTest {
       // Initialize location sharing service
       await _serviceManager.locationSharingService.initialize();
 
-      // Initialize emergency detection service
-      await _serviceManager.emergencyDetectionService.initialize();
+      // Note: Emergency detection (ACFD) handled by SensorService via AppServiceManager
 
       _isInitialized = true;
       debugPrint(
@@ -297,21 +296,21 @@ class LocationMapSARIntegrationTest {
         });
       }
 
-      // Test 2: Test emergency detection service
-      debugPrint('🚁 Test 2: Testing emergency detection service...');
+      // Test 2: Test sensor service (ACFD)
+      debugPrint('🚁 Test 2: Testing sensor service (ACFD)...');
       try {
-        final emergencyService = _serviceManager.emergencyDetectionService;
-        final status = emergencyService.getStatus();
+        final sensorService = _serviceManager.sensorService;
+        final isMonitoring = sensorService.isMonitoring;
         results['tests'].add({
-          'name': 'Emergency Detection Service',
+          'name': 'Sensor Service (ACFD)',
           'success': true,
-          'details': 'Emergency detection status: $status',
+          'details': 'Sensor monitoring active: $isMonitoring',
         });
       } catch (e) {
         results['tests'].add({
-          'name': 'Emergency Detection Service',
+          'name': 'Sensor Service (ACFD)',
           'success': false,
-          'details': 'Failed to get emergency detection status: $e',
+          'details': 'Failed to get sensor service status: $e',
         });
       }
 

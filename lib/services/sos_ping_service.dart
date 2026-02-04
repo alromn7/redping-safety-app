@@ -1047,7 +1047,7 @@ class SOSPingService {
 
       await _publishPingToFirestore(ping);
       debugPrint(
-        'SOSPingService: REDP!NG help ping published to Firestore regional_pings',
+        'SOSPingService: REDP!NG help ping published to Firestore sos_pings',
       );
     } catch (e) {
       debugPrint('SOSPingService: Firestore publish failed (will retry): $e');

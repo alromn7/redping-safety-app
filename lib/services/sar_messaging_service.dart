@@ -2,9 +2,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/emergency_message.dart';
+import '../models/messaging/message_packet.dart' as msg;
 import '../models/sar_identity.dart';
 import 'emergency_messaging_service.dart';
 import 'sar_identity_service.dart';
+import 'messaging_initializer.dart';
 
 /// Service for SAR members to communicate directly with SOS users
 class SARMessagingService {
@@ -14,6 +16,7 @@ class SARMessagingService {
 
   final EmergencyMessagingService _emergencyMessagingService =
       EmergencyMessagingService();
+  final MessagingInitializer _messaging = MessagingInitializer();
 
   // SAR member identification
   String? _sarMemberId;
@@ -101,49 +104,18 @@ class SARMessagingService {
       // Initialize emergency messaging service
       await _emergencyMessagingService.initialize();
 
+      // Initialize new messaging system
+      await _messaging.initialize();
+
+      // Set up message listeners with proper deduplication (INFINITE LOOP FIX)
+      _messaging.engine.receivedStream.listen((packet) {
+        _handleReceivedPacket(packet);
+      });
+
       // Load existing conversations
       await _loadConversations();
 
-      // Set up message listeners - TEMPORARILY DISABLED to prevent crashes
-      // TODO: Fix the infinite message loop issue properly
-      /*
-      _emergencyMessagingService.messagesStream.listen((messages) {
-        debugPrint(
-          'SARMessagingService: Received ${messages.length} messages from emergency messaging service',
-        );
-
-        // Process messages from emergency messaging service
-        for (final message in messages) {
-          // Skip already processed messages to prevent infinite loops
-          if (_processedMessageIds.contains(message.id)) {
-            continue;
-          }
-          
-          debugPrint(
-            'SARMessagingService: Processing message from ${message.senderId} (type: ${message.type})',
-          );
-
-          // Accept messages from users that are not from this SAR member
-          if (message.senderId != _sarMemberId &&
-              (message.type == MessageType.userResponse ||
-                  message.type == MessageType.emergency ||
-                  message.type == MessageType.response)) {
-            debugPrint(
-              'SARMessagingService: Message qualifies for SAR processing',
-            );
-            _processedMessageIds.add(message.id); // Mark as processed
-            _handleIncomingUserMessage(message);
-          } else {
-            debugPrint(
-              'SARMessagingService: Message filtered out - senderId: ${message.senderId}, sarMemberId: $_sarMemberId, type: ${message.type}',
-            );
-            _processedMessageIds.add(message.id); // Mark as processed even if filtered
-          }
-        }
-      });
-      */
-
-      // Simple demo message setup instead
+      // Setup demo messages
       _setupDemoMessages();
 
       // Start periodic sync
@@ -199,21 +171,30 @@ class SARMessagingService {
         },
       );
 
-      // Send via emergency messaging service
+      // Send via new MessageEngine (with deduplication)
       debugPrint(
-        'SARMessagingService: Sending message to emergency messaging service',
+        'SARMessagingService: Sending message via new messaging system',
       );
-      await _emergencyMessagingService.receiveMessageFromSAR(
-        senderId: _sarMemberId!,
-        senderName: _sarMemberName!,
+
+      final conversationId =
+          'sar_to_sos_${sosUserId}_${DateTime.now().millisecondsSinceEpoch}';
+
+      await _messaging.engine.sendMessage(
+        conversationId: conversationId,
         content: message.content,
-        priority: message.priority,
-        type: message.type,
-        metadata: message.metadata,
+        type: msg.MessageType.text,
+        priority: _convertPriority(message.priority),
+        recipients: [sosUserId],
+        metadata: {
+          'senderName': _sarMemberName!,
+          'sarMemberId': _sarMemberId,
+          'sarMemberType': _sarMemberType?.name,
+          ...message.metadata,
+        },
       );
 
       debugPrint(
-        'SARMessagingService: Message successfully sent to emergency messaging service',
+        'SARMessagingService: Message successfully sent via new system',
       );
 
       // Add to local conversation
@@ -527,6 +508,107 @@ class SARMessagingService {
     }
   }
   */
+
+  /// Handle received message packet from new messaging system
+  Future<void> _handleReceivedPacket(msg.MessagePacket packet) async {
+    try {
+      // Skip messages from this SAR member (avoid self-messages)
+      if (packet.senderId == _sarMemberId) {
+        debugPrint('SARMessagingService: Skipping own message');
+        return;
+      }
+
+      // Get conversation key to decrypt
+      final conversationKey = await _messaging.crypto.getConversationKey(
+        packet.conversationId,
+      );
+      if (conversationKey == null) {
+        debugPrint(
+          'SARMessagingService: No conversation key for ${packet.conversationId}',
+        );
+        return;
+      }
+
+      // Decrypt the content
+      final content = await _messaging.crypto.decryptMessage(
+        packet.encryptedPayload,
+        conversationKey,
+      );
+
+      // Get sender name from metadata
+      final senderName = packet.metadata['senderName'] as String? ?? 'SOS User';
+
+      // Convert to EmergencyMessage for compatibility
+      final message = EmergencyMessage(
+        id: packet.messageId,
+        senderId: packet.senderId,
+        senderName: senderName,
+        content: content,
+        recipients: [_sarMemberId!],
+        timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
+        priority: _convertPriorityFromString(packet.priority),
+        type: _convertTypeFromString(packet.type),
+        status: MessageStatus.sent,
+        isRead: false,
+        metadata: packet.metadata,
+      );
+
+      // Add to conversation
+      _addToConversation(packet.senderId, message);
+
+      // Notify listeners
+      _messageReceivedController.add(message);
+
+      debugPrint(
+        'SARMessagingService: Message received via new system - ${message.id}',
+      );
+    } catch (e) {
+      debugPrint('SARMessagingService: Error handling received packet - $e');
+    }
+  }
+
+  /// Convert legacy MessagePriority to new MessagePriority
+  msg.MessagePriority _convertPriority(MessagePriority priority) {
+    switch (priority) {
+      case MessagePriority.low:
+      case MessagePriority.medium:
+        return msg.MessagePriority.normal;
+      case MessagePriority.high:
+        return msg.MessagePriority.high;
+      case MessagePriority.critical:
+        return msg.MessagePriority.emergency;
+    }
+  }
+
+  /// Convert priority string to legacy MessagePriority
+  MessagePriority _convertPriorityFromString(String priority) {
+    switch (priority) {
+      case 'emergency':
+        return MessagePriority.critical;
+      case 'high':
+        return MessagePriority.high;
+      case 'normal':
+        return MessagePriority.medium;
+      default:
+        return MessagePriority.medium;
+    }
+  }
+
+  /// Convert type string to legacy MessageType
+  MessageType _convertTypeFromString(String type) {
+    switch (type) {
+      case 'text':
+        return MessageType.general;
+      case 'sos':
+        return MessageType.emergency;
+      case 'location':
+        return MessageType.status;
+      case 'system':
+        return MessageType.response;
+      default:
+        return MessageType.userResponse;
+    }
+  }
 
   /// Dispose service
   void dispose() {

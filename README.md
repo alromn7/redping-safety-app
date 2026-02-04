@@ -98,6 +98,46 @@ flutter pub get
 flutter run
 ```
 
+### **Release Build (Local)**
+```bash
+flutter build appbundle --release
+flutter build apk --release
+```
+
+### **Keystore & CI Secrets Setup**
+1. Generate release keystore:
+```bash
+keytool -genkeypair -v -keystore android/keystore/redping-release.jks -storetype JKS -keyalg RSA -keysize 4096 -validity 12000 -alias redping_release
+```
+2. Base64 encode for GitHub secret:
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('android\keystore\redping-release.jks')) | Out-File keystore.b64
+Get-Content keystore.b64 | Set-Clipboard
+```
+3. Add repository secrets (Settings → Secrets → Actions):
+   - `ANDROID_KEYSTORE_BASE64` – contents of `keystore.b64`
+   - `ANDROID_KEYSTORE_PASSWORD` – keystore password
+   - `ANDROID_KEY_PASSWORD` – key (alias) password
+   - `ANDROID_KEY_ALIAS` – `redping_release` (or custom alias)
+4. (Optional local file) `key.properties` for developer machines:
+```
+storeFile=android/keystore/redping-release.jks
+storePassword=<storePassword>
+keyAlias=redping_release
+keyPassword=<keyPassword>
+```
+5. Run script locally:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\release_build_verify.ps1
+```
+6. Trigger CI build by pushing a tag:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Artifacts (AAB + APK) appear in GitHub Actions under "Release Build & Verify".
+
 ### **First-Time Setup**:
 1. Read `BATTERY_GOVERNANCE_RULES.md` (REQUIRED)
 2. Complete Level 1 battery certification quiz

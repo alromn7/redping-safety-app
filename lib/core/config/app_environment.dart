@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'stripe_config.dart';
 
 /// Environment configuration for RedPing app
 /// Handles API keys, endpoints, and feature flags for different environments
@@ -9,32 +10,14 @@ class AppEnvironment {
       : Environment.development;
 
   /// Stripe Configuration
-  static String get stripePublishableKey {
-    switch (environment) {
-      case Environment.development:
-        return const String.fromEnvironment(
-          'STRIPE_PUBLISHABLE_KEY_DEV',
-          defaultValue: 'pk_test_YOUR_TEST_KEY_HERE',
-        );
-      case Environment.staging:
-        return const String.fromEnvironment(
-          'STRIPE_PUBLISHABLE_KEY_STAGING',
-          defaultValue: 'pk_test_YOUR_STAGING_KEY_HERE',
-        );
-      case Environment.production:
-        return const String.fromEnvironment(
-          'STRIPE_PUBLISHABLE_KEY_PROD',
-          defaultValue:
-              'pk_live_51SVNMiPlurWsomXvjlPBOzpskjBW3hKF5aLKrapO23AVUAhBRZ1Ch8zOZl5UlxtQmf0HKJq0hoad3jzr148tpiXa00pDQw8lwi',
-        );
-    }
-  }
+  static String get stripePublishableKey => StripeConfig.publishableKey;
 
   /// Stripe Merchant Identifier (for Apple Pay)
-  static const String stripeMerchantIdentifier = 'merchant.com.redping.redping';
+  static const String stripeMerchantIdentifier =
+      StripeConfig.merchantIdentifier;
 
   /// Stripe URL Scheme (for 3D Secure)
-  static const String stripeUrlScheme = 'redping';
+  static const String stripeUrlScheme = StripeConfig.urlScheme;
 
   /// Firebase Cloud Functions URL
   static String get cloudFunctionsUrl {

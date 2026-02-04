@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:signature/signature.dart';
+// Signature package removed in Phase 1 APK optimization - using checkbox acceptance
 import '../../../../core/theme/app_theme.dart';
 import '../../../../models/volunteer_participation.dart';
 import '../../../../models/sar_session.dart';
@@ -26,11 +26,8 @@ class _VolunteerMissionPageState extends State<VolunteerMissionPage>
   final VolunteerRescueService _volunteerService = VolunteerRescueService();
 
   late TabController _tabController;
-  final SignatureController _signatureController = SignatureController(
-    penStrokeWidth: 3,
-    penColor: AppTheme.primaryText,
-    exportBackgroundColor: Colors.white,
-  );
+  // Signature controller removed - using checkbox acceptance instead
+  bool _hasSignedWaiver = false;
 
   // Form controllers
   final _emergencyNameController = TextEditingController();
@@ -64,7 +61,7 @@ class _VolunteerMissionPageState extends State<VolunteerMissionPage>
   @override
   void dispose() {
     _tabController.dispose();
-    _signatureController.dispose();
+    // Signature controller removed - using checkbox
     _emergencyNameController.dispose();
     _emergencyPhoneController.dispose();
     _emergencyRelationshipController.dispose();
@@ -691,41 +688,23 @@ class _VolunteerMissionPageState extends State<VolunteerMissionPage>
                   ),
                   const SizedBox(height: 12),
 
-                  Container(
-                    height: 200,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: AppTheme.neutralGray),
-                      borderRadius: BorderRadius.circular(8),
+                  // Signature pad removed in Phase 1 APK optimization
+                  // Using checkbox acceptance for liability waiver
+                  CheckboxListTile(
+                    value: _hasSignedWaiver,
+                    onChanged: (value) {
+                      setState(() => _hasSignedWaiver = value ?? false);
+                    },
+                    title: const Text(
+                      'I have read and accept the liability waiver',
+                      style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    child: Signature(
-                      controller: _signatureController,
-                      backgroundColor: Colors.white,
+                    subtitle: const Text(
+                      'By checking this box, I acknowledge that I have read, '
+                      'understood, and agree to the terms of the volunteer '
+                      'liability waiver.',
                     ),
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _signatureController.clear(),
-                          icon: const Icon(Icons.clear),
-                          label: const Text('Clear'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _signatureController.isNotEmpty
-                              ? _previewSignature
-                              : null,
-                          icon: const Icon(Icons.preview),
-                          label: const Text('Preview'),
-                        ),
-                      ),
-                    ],
+                    controlAffinity: ListTileControlAffinity.leading,
                   ),
                 ],
               ),
@@ -859,7 +838,7 @@ class _VolunteerMissionPageState extends State<VolunteerMissionPage>
   bool _canSubmit() {
     return _validateRoleAndSkills() &&
         _validateRiskAcknowledgment() &&
-        _signatureController.isNotEmpty;
+        _hasSignedWaiver;
   }
 
   // Form submission
@@ -876,11 +855,11 @@ class _VolunteerMissionPageState extends State<VolunteerMissionPage>
         relationship: _emergencyRelationshipController.text.trim(),
       );
 
-      // Get signature as base64
-      final signatureBytes = await _signatureController.toPngBytes();
-      final signatureBase64 = base64Encode(signatureBytes!);
+      // Signature removed - using checkbox acceptance timestamp
+      final acceptanceTimestamp = DateTime.now().toIso8601String();
+      final signatureBase64 = base64Encode(acceptanceTimestamp.codeUnits);
 
-      // Acknowledge risks first
+      // Acknowledge risks first (with checkbox acceptance instead of signature)
       await _volunteerService.acknowledgeRisks(
         missionId: widget.missionId,
         digitalSignature: signatureBase64,
@@ -917,44 +896,8 @@ class _VolunteerMissionPageState extends State<VolunteerMissionPage>
     }
   }
 
-  void _previewSignature() async {
-    try {
-      final signatureBytes = await _signatureController.toPngBytes();
-      if (signatureBytes != null) {
-        if (!mounted) return;
-        showDialog(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Signature Preview'),
-            content: Container(
-              height: 200,
-              width: 300,
-              decoration: BoxDecoration(
-                border: Border.all(color: AppTheme.neutralGray),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Image.memory(signatureBytes, fit: BoxFit.contain),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Close'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(dialogContext);
-                  _signatureController.clear();
-                },
-                child: const Text('Clear & Redo'),
-              ),
-            ],
-          ),
-        );
-      }
-    } catch (e) {
-      _showError('Failed to preview signature: $e');
-    }
-  }
+  // Signature preview removed in Phase 1 APK optimization
+  // Using checkbox acceptance instead of digital signature
 
   // Helper methods
   List<String> _getAvailableSkills() {

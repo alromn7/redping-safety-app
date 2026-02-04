@@ -128,10 +128,6 @@ class FamilyStatsWidget extends StatelessWidget {
               family.settings.allowSharedEmergencyContacts,
             ),
             _buildFeatureStatus(
-              'Family Chat',
-              family.settings.familyChatEnabled,
-            ),
-            _buildFeatureStatus(
               'Activity Sharing',
               family.settings.allowActivitySharing,
             ),

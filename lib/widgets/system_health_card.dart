@@ -55,8 +55,12 @@ class _SystemHealthCardState extends State<SystemHealthCard> {
               context,
               icon: Icons.cloud_outlined,
               label: 'API',
-              value: isConnected ? 'Connected' : 'Disconnected',
-              color: isConnected ? Colors.green : Colors.redAccent,
+              value: isConnected
+                  ? 'Connected'
+                  : (lastReq != null ? 'Inactive' : 'Checking...'),
+              color: isConnected
+                  ? Colors.green
+                  : (lastReq != null ? Colors.orange : Colors.grey),
               trailing: lastReq != null ? 'Last: $lastReq' : null,
             ),
             const SizedBox(height: 8),
@@ -65,11 +69,11 @@ class _SystemHealthCardState extends State<SystemHealthCard> {
               icon: Icons.verified_user_outlined,
               label: 'Security',
               value: protOk == true
-                  ? 'Protected: OK'
-                  : (protOk == false ? 'Protected: Failed' : 'Protected: —'),
+                  ? 'OK'
+                  : (protOk == false ? 'Failed' : 'Checking...'),
               color: protOk == true
                   ? Colors.green
-                  : (protOk == false ? Colors.redAccent : Colors.orange),
+                  : (protOk == false ? Colors.redAccent : Colors.grey),
               trailing: protAt != null ? 'At: $protAt' : null,
             ),
             if (showBar) ...[

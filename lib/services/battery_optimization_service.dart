@@ -49,6 +49,11 @@ class BatteryOptimizationService {
   /// Update current battery status
   Future<void> _updateBatteryStatus() async {
     try {
+      // Skip if monitoring is disabled (prevents warnings during hot reload)
+      if (_batteryMonitorTimer == null || !_batteryMonitorTimer!.isActive) {
+        return;
+      }
+
       _currentBatteryState = await _battery.batteryState;
       _currentBatteryLevel = await _battery.batteryLevel;
 
@@ -143,8 +148,8 @@ class BatteryOptimizationService {
     }
   }
 
-  /// Get recommended AI processing frequency based on battery level
-  Duration getRecommendedAIProcessingInterval() {
+  /// Get recommended background processing frequency based on battery level
+  Duration getRecommendedBackgroundProcessingInterval() {
     final level = _determineOptimizationLevel();
 
     switch (level) {

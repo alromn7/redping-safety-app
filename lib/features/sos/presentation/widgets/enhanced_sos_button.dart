@@ -4,7 +4,7 @@ import 'dart:async';
 import '../../../../core/theme/app_theme.dart';
 
 /// Enhanced round SOS button with heartbeat animation and full functionality
-/// Now includes 10-second activation and 5-second reset with green activated state
+/// Now includes 5-second activation and 5-second reset with green activated state
 class EnhancedSOSButton extends StatefulWidget {
   final bool isActive;
   final bool isCountdown;
@@ -12,7 +12,7 @@ class EnhancedSOSButton extends StatefulWidget {
   final int countdownSeconds;
   final VoidCallback onPressed;
   final VoidCallback? onLongPress;
-  final VoidCallback? onActivated; // New: callback for SOS activation after 10s
+  final VoidCallback? onActivated; // New: callback for SOS activation after 5s
   final VoidCallback? onReset; // New: callback for SOS reset after 5s
   final bool enableHeartbeat;
   final double size;
@@ -42,12 +42,14 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
   late AnimationController _pulseController;
   late AnimationController _heartbeatController;
   late AnimationController _rippleController;
+  late AnimationController _logoFadeController;
 
   // Animations
   late Animation<double> _pressAnimation;
   late Animation<double> _pulseAnimation;
   late Animation<double> _heartbeatAnimation;
   late Animation<double> _rippleAnimation;
+  late Animation<double> _logoFadeAnimation;
 
   // State tracking
   bool _isPressed = false;
@@ -57,7 +59,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
   Timer? _longPressTimer;
   DateTime? _longPressStartTime;
   double _longPressProgress = 0.0;
-  bool _isActivationPress = false; // 10s press for activation
+  bool _isActivationPress = false; // 5s press for activation
   bool _isResetPress = false; // 5s press for reset
 
   @override
@@ -92,6 +94,12 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
       vsync: this,
     );
 
+    // Logo fade animation (5 seconds each direction = 10 seconds total cycle)
+    _logoFadeController = AnimationController(
+      duration: const Duration(seconds: 5),
+      vsync: this,
+    );
+
     // Define animation curves and ranges
     _pressAnimation = Tween<double>(begin: 1.0, end: 0.92).animate(
       CurvedAnimation(parent: _pressController, curve: Curves.easeInOut),
@@ -108,11 +116,23 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
     _rippleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _rippleController, curve: Curves.easeOut),
     );
+
+    // Logo fade animation: fade in (0->1) then fade out (1->0) = 10 seconds total
+    _logoFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _logoFadeController, curve: Curves.easeInOut),
+    );
   }
 
   void _startHeartbeat() {
     if (widget.enableHeartbeat && !_heartbeatController.isAnimating) {
       _heartbeatController.repeat(reverse: true);
+    }
+    // Start logo fade animation (repeating every 10 seconds)
+    if (!_logoFadeController.isAnimating) {
+      _logoFadeController.repeat(reverse: true);
+      debugPrint(
+        'EnhancedSOSButton: 🎬 Logo fade animation started (5s fade in + 5s fade out = 10s cycle)',
+      );
     }
   }
 
@@ -120,6 +140,10 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
     if (_heartbeatController.isAnimating) {
       _heartbeatController.stop();
       _heartbeatController.reset();
+    }
+    if (_logoFadeController.isAnimating) {
+      _logoFadeController.stop();
+      _logoFadeController.reset();
     }
   }
 
@@ -164,6 +188,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
     _pulseController.dispose();
     _heartbeatController.dispose();
     _rippleController.dispose();
+    _logoFadeController.dispose();
     super.dispose();
   }
 
@@ -202,7 +227,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
     _isResetPress = widget.isActivated;
 
     if (_isActivationPress) {
-      debugPrint('EnhancedSOSButton: 🔴 Starting 10-second ACTIVATION press');
+      debugPrint('EnhancedSOSButton: 🔴 Starting 5-second ACTIVATION press');
     } else if (_isResetPress) {
       debugPrint('EnhancedSOSButton: 🔄 Starting 5-second RESET press');
     }
@@ -230,7 +255,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
   void _startLongPressTimer() {
     const updateInterval = Duration(milliseconds: 50);
     final requiredDuration = _isActivationPress
-        ? const Duration(seconds: 10) // 10 seconds for activation
+        ? const Duration(seconds: 5) // 5 seconds for activation
         : const Duration(seconds: 5); // 5 seconds for reset
 
     _longPressTimer = Timer.periodic(updateInterval, (timer) {
@@ -273,9 +298,9 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
     HapticFeedback.heavyImpact();
 
     if (_isActivationPress && widget.onActivated != null) {
-      // Complete 10-second press - activate SOS
+      // Complete 5-second press - activate SOS
       debugPrint(
-        'EnhancedSOSButton: ✅ 10-second activation complete - calling onActivated',
+        'EnhancedSOSButton: ✅ 5-second activation complete - calling onActivated',
       );
       widget.onActivated!();
     } else if (_isResetPress && widget.onReset != null) {
@@ -346,7 +371,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
       return widget.countdownSeconds.toString();
     } else if (_isLongPressing && _isActivationPress) {
       // Show activation countdown
-      final remaining = (10.0 * (1.0 - _longPressProgress)).ceil();
+      final remaining = (5.0 * (1.0 - _longPressProgress)).ceil();
       return remaining.toString();
     } else {
       return 'SOS';
@@ -366,7 +391,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
     } else if (_isLongPressing && _isActivationPress) {
       return 'Keep Holding...';
     } else {
-      return 'Hold 10s to Activate';
+      return 'Hold 5s to Activate';
     }
   }
 
@@ -385,6 +410,7 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
           _pulseAnimation,
           _heartbeatAnimation,
           _rippleAnimation,
+          _logoFadeAnimation,
         ]),
         builder: (context, child) {
           try {
@@ -524,6 +550,38 @@ class _EnhancedSOSButtonState extends State<EnhancedSOSButton>
                                 ),
                               ],
                             ],
+                          ),
+
+                          // RedPing Logo with fade effect (fades in and out every 10 seconds)
+                          // Test: Always show the logo to debug
+                          Opacity(
+                            opacity: _logoFadeAnimation.value.clamp(0.0, 1.0),
+                            child: Container(
+                              width: widget.size * 0.55,
+                              height: widget.size * 0.55,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white.withValues(alpha: 0.85),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 8,
+                                    spreadRadius: 2,
+                                  ),
+                                ],
+                              ),
+                              child: Center(
+                                child: Text(
+                                  'RP',
+                                  style: TextStyle(
+                                    color: _getButtonColor(),
+                                    fontSize: widget.size * 0.2,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.0,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
 
                           // Pulse rings for countdown

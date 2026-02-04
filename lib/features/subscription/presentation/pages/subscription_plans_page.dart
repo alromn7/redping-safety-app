@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
+import '../../../../core/app/app_launch_config.dart';
 import '../../../../models/auth_user.dart';
 import '../../../../models/subscription_tier.dart';
 import '../../../../models/subscription_plan.dart';
@@ -86,7 +88,7 @@ class _SubscriptionPlansPageState extends State<SubscriptionPlansPage>
             if (Navigator.canPop(context)) {
               Navigator.pop(context);
             } else {
-              context.go('/main');
+              context.go(AppLaunchConfig.homeRoute);
             }
           },
         ),
@@ -347,8 +349,8 @@ class _SubscriptionPlansPageState extends State<SubscriptionPlansPage>
                     'Get alerts from family emergencies',
                   ),
                   _buildFeatureItem(
-                    'Family Chat Channel',
-                    'Private family communication',
+                    'Family Portal Messaging',
+                    'Not available in-app in this build',
                   ),
                   _buildFeatureItem(
                     'Coordinated SAR Response',

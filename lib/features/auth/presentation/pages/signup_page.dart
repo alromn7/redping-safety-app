@@ -5,9 +5,11 @@ import 'package:go_router/go_router.dart';
 import '../../../../models/auth_user.dart';
 import '../../../../services/auth_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/routing/app_router.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/app_service_manager.dart';
+import '../../../../services/connectivity_monitor_service.dart';
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -101,17 +103,48 @@ class _SignupPageState extends State<SignupPage> {
       await AuthService.instance.signUpWithEmailAndPassword(request);
 
       if (mounted) {
-        // Show success message
+        // Show success message with email verification notice
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Account created successfully!'),
+          SnackBar(
+            content: const Text(
+              '✅ Account created! Check your email for verification link.',
+            ),
             backgroundColor: AppTheme.safeGreen,
             behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Resend',
+              textColor: Colors.white,
+              onPressed: () async {
+                try {
+                  await AuthService.instance.resendVerificationEmail();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('📧 Verification email sent!'),
+                        backgroundColor: AppTheme.safeGreen,
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('❌ Failed to send email: $e'),
+                        backgroundColor: AppTheme.criticalRed,
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
           ),
         );
 
-        // Navigate to AI onboarding for new users (includes AI permission request)
-        context.go('/ai-onboarding');
+        // Navigate to standard onboarding for new users
+        context.go(AppRouter.onboarding);
       }
     } on AuthException catch (e) {
       if (mounted) {
@@ -183,8 +216,8 @@ class _SignupPageState extends State<SignupPage> {
               behavior: SnackBarBehavior.floating,
             ),
           );
-          // Navigate to AI onboarding for new users
-          context.go('/ai-onboarding');
+          // Navigate to onboarding for new users
+          context.go(AppRouter.onboarding);
         }
       }
     } catch (e) {
@@ -543,12 +576,9 @@ class _SignupPageState extends State<SignupPage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         // Google Logo - increased by 75% (20 -> 35)
-                        Image.network(
-                          'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
-                          height: 35,
-                          width: 35,
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) {
+                        () {
+                          final offline = ConnectivityMonitorService().isEffectivelyOffline;
+                          if (offline) {
                             return Container(
                               height: 35,
                               width: 35,
@@ -562,8 +592,29 @@ class _SignupPageState extends State<SignupPage> {
                                 color: Color(0xFF4285F4),
                               ),
                             );
-                          },
-                        ),
+                          }
+                          return Image.network(
+                            'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
+                            height: 35,
+                            width: 35,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                height: 35,
+                                width: 35,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: const Icon(
+                                  Icons.g_mobiledata,
+                                  size: 35,
+                                  color: Color(0xFF4285F4),
+                                ),
+                              );
+                            },
+                          );
+                        }(),
                         const SizedBox(width: 24),
                         const Text(
                           'Continue with Google',

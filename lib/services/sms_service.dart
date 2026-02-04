@@ -5,12 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/sos_session.dart';
+import 'connectivity_monitor_service.dart';
 import '../models/emergency_contact.dart';
 import '../core/constants/app_constants.dart';
 import 'platform_sms_sender_service.dart';
 import 'emergency_event_bus.dart';
 import 'test_mode_diagnostic_service.dart';
-import 'feature_access_service.dart';
 
 class SMSService {
   static final SMSService instance = SMSService._internal();
@@ -20,8 +20,6 @@ class SMSService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final PlatformSMSSenderService _smsSender = PlatformSMSSenderService();
   final EmergencyEventBus _eventBus = EmergencyEventBus();
-  final FeatureAccessService _featureAccessService =
-      FeatureAccessService.instance;
 
   final Map<String, Timer?> _activeTimers = {};
   final Map<String, int> _smsCounts = {};
@@ -59,14 +57,6 @@ class SMSService {
     SOSSession session,
     List<EmergencyContact> contacts,
   ) async {
-    // ?? SUBSCRIPTION GATE: SOS SMS requires Essential+ or above
-    if (!_featureAccessService.hasFeatureAccess('sosSMS')) {
-      debugPrint('?? SMSService: SOS SMS not available - Free tier');
-      debugPrint('   Upgrade to Essential+ for Automated SMS Emergency Alerts');
-      debugPrint('   In-app notifications will still be sent');
-      return;
-    }
-
     // TEST MODE v2.0: Override contacts if SMS test mode enabled
     List<EmergencyContact> effectiveContacts = contacts;
     if (AppConstants.testingModeEnabled && AppConstants.useSmsTestMode) {
@@ -690,6 +680,11 @@ class SMSService {
     String? cardLinkUsed,
   }) async {
     try {
+      // Avoid Firestore writes when offline to reduce error floods
+      if (ConnectivityMonitorService().isOffline) {
+        debugPrint('SMSService: Offline - skipping Firestore SMS logging');
+        return;
+      }
       await _firestore
           .collection('sos_sessions')
           .doc(sessionId)
@@ -715,6 +710,10 @@ class SMSService {
 
   Future<List<EmergencyContact>> _getEmergencyContacts(String userId) async {
     try {
+      if (ConnectivityMonitorService().isOffline) {
+        debugPrint('SMSService: Offline - cannot fetch contacts from Firestore');
+        return [];
+      }
       final doc = await _firestore.collection('users').doc(userId).get();
       final data = doc.data();
       if (data == null || !data.containsKey('emergencyContacts')) return [];

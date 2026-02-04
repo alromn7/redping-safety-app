@@ -331,8 +331,6 @@ class _UsageDashboardState extends State<UsageDashboard> {
         return 'SAR Participation';
       case 'organizationManagement':
         return 'Organization Management';
-      case 'aiAssistant':
-        return 'AI Assistant';
       default:
         return feature.replaceAll(RegExp(r'([A-Z])'), ' \$1').trim();
     }

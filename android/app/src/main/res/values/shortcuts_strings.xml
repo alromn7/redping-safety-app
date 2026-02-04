@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Shortcuts for Google Assistant Integration -->
+    
+    <!-- SOS Shortcut -->
+    <string name="shortcut_sos_short">Start SOS</string>
+    <string name="shortcut_sos_long">Start Emergency SOS</string>
+    
+    <!-- Cancel SOS Shortcut -->
+    <string name="shortcut_cancel_short">Cancel SOS</string>
+    <string name="shortcut_cancel_long">Cancel Active SOS</string>
+    
+    <!-- Location Shortcut -->
+    <string name="shortcut_location_short">Share Location</string>
+    <string name="shortcut_location_long">Share My Location</string>
+    
+    <!-- Status Shortcut -->
+    <string name="shortcut_status_short">Safety Status</string>
+    <string name="shortcut_status_long">Check Safety Status</string>
+    
+    <!-- Disabled Message -->
+    <string name="shortcut_disabled">This feature requires the RedPing app to be running</string>
+</resources>

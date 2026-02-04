@@ -1,6 +1,6 @@
 package com.redping.redping
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import android.content.Context
@@ -10,9 +10,10 @@ import android.provider.Settings
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.telephony.TelephonyManager
 import java.util.HashMap
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
     
     private companion object {
         const val BATTERY_CHANNEL = "com.redping.redping/battery"
@@ -78,6 +79,16 @@ class MainActivity : FlutterActivity() {
                     "getManufacturer" -> {
                         val manufacturer = Build.MANUFACTURER
                         result.success(manufacturer)
+                    }
+                    "getCarrierName" -> {
+                        try {
+                            val telephony = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                            val name = telephony.networkOperatorName ?: telephony.simOperatorName ?: ""
+                            result.success(name)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error getting carrier name", e)
+                            result.success("")
+                        }
                     }
                     else -> result.notImplemented()
                 }

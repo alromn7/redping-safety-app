@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../models/sos_session.dart';
-import '../models/chat_message.dart' as chat;
+// chat_message import removed - no longer needed
 import 'notification_service.dart';
-import 'chat_service.dart';
+// ChatService import removed - emergency messaging uses EmergencyMessagingService
 
 /// Service for managing rescue team responses and emergency contact feedback
 class RescueResponseService {
@@ -14,7 +14,7 @@ class RescueResponseService {
   RescueResponseService._internal();
 
   final NotificationService _notificationService = NotificationService();
-  final ChatService _chatService = ChatService();
+  // ChatService removed - no longer used
 
   bool _isInitialized = false;
 
@@ -308,14 +308,8 @@ class RescueResponseService {
       await _notificationService.showRescueStatusUpdate(title, body);
     }
 
-    // Send to chat as well
-    await _chatService.sendMessage(
-      chatId: 'sos_${session.id}',
-      content:
-          '$title\n$body${response.message != null ? '\n\n"${response.message}"' : ''}',
-      type: chat.MessageType.emergency,
-      priority: chat.MessagePriority.high,
-    );
+    // Chat messaging removed - now uses EmergencyMessagingService/SARMessagingService
+    // await _chatService.sendMessage(...) - REMOVED
   }
 
   /// Notify about emergency contact response
@@ -333,13 +327,8 @@ class RescueResponseService {
       body,
     );
 
-    // Send to chat as well
-    await _chatService.sendMessage(
-      chatId: 'sos_${session.id}',
-      content: '$title\n$body',
-      type: chat.MessageType.system,
-      priority: chat.MessagePriority.normal,
-    );
+    // Chat messaging removed - now uses EmergencyMessagingService/SARMessagingService
+    // await _chatService.sendMessage(...) - REMOVED
   }
 
   // Simulation methods REMOVED - production uses real Firebase updates only

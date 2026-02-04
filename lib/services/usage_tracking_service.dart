@@ -2,16 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'subscription_service.dart';
 
-/// Service for tracking feature usage and enforcing subscription limits
+/// Service for tracking feature usage.
+///
+/// Subscription/tier enforcement has been removed; all features are treated as
+/// available with no blocking limits.
 class UsageTrackingService {
   UsageTrackingService._();
 
   static final UsageTrackingService _instance = UsageTrackingService._();
   static UsageTrackingService get instance => _instance;
-
-  late final SubscriptionService _subscriptionService;
 
   // Usage tracking data
   Map<String, int> _currentUsage = {};
@@ -24,7 +24,6 @@ class UsageTrackingService {
 
   /// Initialize the usage tracking service
   Future<void> initialize() async {
-    _subscriptionService = SubscriptionService.instance;
     await _loadUsageData();
     await _checkAndResetMonthlyUsage();
     debugPrint('UsageTrackingService: Initialized');
@@ -33,23 +32,8 @@ class UsageTrackingService {
   /// Track feature usage
   Future<bool> trackFeatureUsage(String feature, {int increment = 1}) async {
     try {
-      // Check if user has access to the feature
-      if (!_subscriptionService.hasFeatureAccess(feature)) {
-        debugPrint('UsageTrackingService: Feature $feature not accessible');
-        return false;
-      }
-
       // Get current usage for the feature
       final currentCount = _currentUsage[feature] ?? 0;
-      final limit = _subscriptionService.getFeatureLimit(feature);
-
-      // Check if limit is reached
-      if (limit != -1 && currentCount >= limit) {
-        debugPrint(
-          'UsageTrackingService: Limit reached for $feature ($currentCount/$limit)',
-        );
-        return false;
-      }
 
       // Increment usage
       _currentUsage[feature] = currentCount + increment;
@@ -70,30 +54,12 @@ class UsageTrackingService {
 
   /// Check if user can use a feature (considering limits)
   bool canUseFeature(String feature) {
-    // Check basic access
-    if (!_subscriptionService.hasFeatureAccess(feature)) {
-      return false;
-    }
-
-    // Check usage limits
-    final limit = _subscriptionService.getFeatureLimit(feature);
-    if (limit == -1) {
-      return true; // Unlimited
-    }
-
-    final currentUsage = _currentUsage[feature] ?? 0;
-    return currentUsage < limit;
+    return true;
   }
 
   /// Get remaining usage for a feature
   int getRemainingUsage(String feature) {
-    final limit = _subscriptionService.getFeatureLimit(feature);
-    if (limit == -1) {
-      return -1; // Unlimited
-    }
-
-    final currentUsage = _currentUsage[feature] ?? 0;
-    return (limit - currentUsage).clamp(0, limit);
+    return -1; // Unlimited
   }
 
   /// Get current usage for a feature
@@ -103,13 +69,7 @@ class UsageTrackingService {
 
   /// Get usage percentage for a feature
   double getUsagePercentage(String feature) {
-    final limit = _subscriptionService.getFeatureLimit(feature);
-    if (limit == -1 || limit == 0) {
-      return 0.0;
-    }
-
-    final currentUsage = _currentUsage[feature] ?? 0;
-    return (currentUsage / limit).clamp(0.0, 1.0);
+    return 0.0;
   }
 
   /// Check if user has reached usage limit
@@ -119,31 +79,10 @@ class UsageTrackingService {
 
   /// Get usage status for all features
   Map<String, dynamic> getUsageStatus() {
-    final subscription = _subscriptionService.currentSubscription;
-    if (subscription == null) {
-      return {};
-    }
-
-    final status = <String, dynamic>{};
-    final limits = subscription.plan.limits;
-
-    for (final feature in limits.keys) {
-      final limit = limits[feature];
-      final currentUsage = _currentUsage[feature] ?? 0;
-
-      status[feature] = {
-        'current': currentUsage,
-        'limit': limit,
-        'remaining': limit == -1 ? -1 : (limit - currentUsage).clamp(0, limit),
-        'percentage': limit == -1 || limit == 0
-            ? 0.0
-            : (currentUsage / limit).clamp(0.0, 1.0),
-        'canUse': canUseFeature(feature),
-        'lastUsed': _lastUsage[feature]?.toIso8601String(),
-      };
-    }
-
-    return status;
+    return {
+      'usage': _currentUsage,
+      'lastUsed': _lastUsage.map((k, v) => MapEntry(k, v.toIso8601String())),
+    };
   }
 
   /// Get features that are near their limits (80%+ usage)
@@ -249,23 +188,12 @@ class UsageTrackingService {
 
   /// Get usage analytics for subscription tier
   Map<String, dynamic> getUsageAnalytics() {
-    final subscription = _subscriptionService.currentSubscription;
-    if (subscription == null) {
-      return {};
-    }
-
-    final totalFeatures = subscription.plan.limits.length;
     final usedFeatures = _currentUsage.keys.length;
     final nearLimitFeatures = getFeaturesNearLimit().length;
 
     return {
-      'subscription_tier': subscription.plan.tier.name,
-      'total_features': totalFeatures,
       'used_features': usedFeatures,
       'near_limit_features': nearLimitFeatures,
-      'usage_percentage': totalFeatures > 0
-          ? (usedFeatures / totalFeatures)
-          : 0.0,
       'features_near_limit': getFeaturesNearLimit(),
       'usage_status': getUsageStatus(),
     };

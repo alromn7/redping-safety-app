@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
 import '../models/subscription_tier.dart';
-import '../services/subscription_service.dart';
 
 /// Reusable dialog for subscription upgrade prompts
 class SubscriptionRequiredDialog extends StatelessWidget {
@@ -124,11 +123,11 @@ class SubscriptionRequiredDialog extends StatelessWidget {
         ),
         ElevatedButton.icon(
           onPressed: () {
+            // Subscriptions removed.
             Navigator.pop(context);
-            Navigator.pushNamed(context, '/subscription/plans');
           },
           icon: const Icon(Icons.upgrade),
-          label: const Text('View Plans'),
+          label: const Text('OK'),
           style: ElevatedButton.styleFrom(
             backgroundColor: AppTheme.primaryRed,
             foregroundColor: Colors.white,
@@ -181,31 +180,6 @@ Future<bool> checkSubscriptionAccess(
   required SubscriptionTier requiredTier,
   List<String>? benefits,
 }) async {
-  final subscriptionService = SubscriptionService.instance;
-  final currentSub = subscriptionService.currentSubscription;
-  final currentTier = currentSub?.plan.tier ?? SubscriptionTier.free;
-
-  // Check if user has required tier or higher
-  final tierOrder = {
-    SubscriptionTier.free: 0,
-    SubscriptionTier.essentialPlus: 1,
-    SubscriptionTier.pro: 2,
-    SubscriptionTier.ultra: 3,
-    SubscriptionTier.family: 4,
-  };
-
-  if ((tierOrder[currentTier] ?? 0) >= (tierOrder[requiredTier] ?? 0)) {
-    return true; // Has access
-  }
-
-  // Show upgrade dialog
-  await SubscriptionRequiredDialog.show(
-    context,
-    featureName: featureName,
-    featureDescription: featureDescription,
-    requiredTier: requiredTier,
-    benefits: benefits,
-  );
-
-  return false; // No access
+  // Subscriptions removed; all features are available.
+  return true;
 }

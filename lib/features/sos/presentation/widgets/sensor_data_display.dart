@@ -1,21 +1,27 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:flutter/foundation.dart';
+// GPS stream handled by LocationService to avoid duplicates
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../services/weather_service.dart';
 import '../../../../core/test_overrides.dart';
+import '../../../../services/location_service.dart';
+import '../../../../models/sos_session.dart'; // Import LocationInfo type
 
 /// Compact sensor data display showing GPS speed, altitude, pressure, and temperature
 class SensorDataDisplay extends StatefulWidget {
   final Function(double?)?
   onSpeedUpdate; // Callback to update parent with GPS speed
+  final Function(double?)?
+  onAltitudeUpdate; // Callback to update parent with GPS altitude (meters)
   final bool forceGPS; // If true, run GPS even when not charging
 
   const SensorDataDisplay({
     super.key,
     this.onSpeedUpdate,
+    this.onAltitudeUpdate,
     this.forceGPS = false,
   });
 
@@ -33,7 +39,7 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
   double? _pressure; // hPa (hectopascals) from barometer
   double? _temperature; // Celsius (if available)
 
-  StreamSubscription<Position>? _positionSubscription;
+  Function(LocationInfo)? _locationListener; // Listener for location updates
   StreamSubscription<BarometerEvent>? _barometerSubscription;
   StreamSubscription<BatteryState>? _batteryStateSubscription;
   Timer? _weatherUpdateTimer;
@@ -45,6 +51,12 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
 
   final Battery _battery = Battery();
   final WeatherService _weatherService = WeatherService();
+  // LocationService provides shared GPS updates
+
+  // Diagnostics throttling
+  DateTime? _lastLogTime;
+  double? _lastLoggedSpeedKmh;
+  double? _lastLoggedAltitudeM;
 
   @override
   void initState() {
@@ -66,61 +78,105 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
     // Pause GPS when app goes to background/inactive
     _isAppActive = state == AppLifecycleState.resumed;
 
+    final locationService = LocationService();
     if (_isAppActive) {
-      debugPrint('SensorDisplay: App active - checking GPS state');
-      _updateGPSState();
+      debugPrint(
+        'SensorDisplay: App active - ensuring LocationService running',
+      );
+      locationService.startTracking();
     } else {
-      debugPrint('SensorDisplay: App inactive - pausing GPS to save battery');
-      _stopGPSTracking();
+      debugPrint('SensorDisplay: App inactive - hibernating LocationService');
+      locationService.hibernate();
     }
   }
 
   /// Monitor battery charging state
   void _monitorBatteryState() async {
-    // Check initial state
-    final initialState = await _battery.batteryState;
-    _isCharging =
-        initialState == BatteryState.charging ||
-        initialState == BatteryState.full;
+    try {
+      // Check initial state
+      final initialState = await _battery.batteryState;
+      if (!mounted) return; // Prevent updates after disposal
 
-    debugPrint('SensorDisplay: Initial charging state: $_isCharging');
-    _updateGPSState();
-
-    // Listen for changes
-    _batteryStateSubscription = _battery.onBatteryStateChanged.listen((
-      BatteryState state,
-    ) {
-      final wasCharging = _isCharging;
       _isCharging =
-          state == BatteryState.charging || state == BatteryState.full;
+          initialState == BatteryState.charging ||
+          initialState == BatteryState.full;
 
-      if (wasCharging != _isCharging) {
-        debugPrint('SensorDisplay: Charging changed: $_isCharging');
-        _updateGPSState();
-      }
-    });
+      debugPrint('SensorDisplay: Initial charging state: $_isCharging');
+      // Charging no longer gates GPS; LocationService manages lifecycle.
+
+      // Listen for changes
+      _batteryStateSubscription = _battery.onBatteryStateChanged.listen((
+        BatteryState state,
+      ) {
+        if (!mounted) return; // Prevent updates after disposal
+
+        final wasCharging = _isCharging;
+        _isCharging =
+            state == BatteryState.charging || state == BatteryState.full;
+
+        if (wasCharging != _isCharging) {
+          debugPrint('SensorDisplay: Charging changed: $_isCharging');
+          // No GPS start/stop here; keep LocationService running as needed.
+        }
+      });
+    } catch (e) {
+      debugPrint('SensorDisplay: Battery monitoring error - $e');
+    }
   }
 
-  /// Update GPS tracking based on charging and app state
-  void _updateGPSState() {
-    final shouldRun =
-        _isAppActive &&
-        _hasLocationPermission &&
-        (widget.forceGPS || _isCharging);
-    if (shouldRun) {
-      debugPrint(
-        'SensorDisplay: Starting GPS (reason: ${widget.forceGPS ? 'forceGPS' : 'charging'})',
-      );
-      _startGPSTracking();
-    } else {
-      if (!_isAppActive) {
-        debugPrint('SensorDisplay: Stopping GPS (app inactive)');
-      } else if (!_hasLocationPermission) {
-        debugPrint('SensorDisplay: Stopping GPS (no permission)');
-      } else if (!_isCharging && !widget.forceGPS) {
-        debugPrint('SensorDisplay: Stopping GPS (power save - not charging)');
+  /// Subscribe to LocationService updates for speed/altitude
+  void _subscribeLocationUpdates() {
+    final locationService = LocationService();
+    _locationListener = (LocationInfo location) {
+      if (!mounted) return;
+      final speedMps = location.speed ?? 0.0;
+      final speedKmh = speedMps * 3.6;
+      setState(() {
+        _speed = speedMps;
+        _altitude = location.altitude;
+      });
+      if (widget.onSpeedUpdate != null) {
+        widget.onSpeedUpdate!(speedKmh < 2.0 ? 0.0 : speedKmh);
       }
-      _stopGPSTracking();
+      if (widget.onAltitudeUpdate != null) {
+        widget.onAltitudeUpdate!(_altitude);
+      }
+
+      // Lightweight diagnostics: log every ~5s or on significant change
+      _logDiagnostics(
+        speedKmh: speedKmh,
+        altitudeM: _altitude,
+        accuracyM: location.accuracy,
+      );
+    };
+    locationService.addLocationListener(_locationListener!);
+  }
+
+  void _logDiagnostics({
+    required double speedKmh,
+    required double? altitudeM,
+    required double? accuracyM,
+  }) {
+    if (!kDebugMode) return;
+
+    final now = DateTime.now();
+    final shouldTimeLog = _lastLogTime == null ||
+        now.difference(_lastLogTime!).inSeconds >= 5;
+    final speedDelta = (_lastLoggedSpeedKmh == null)
+        ? double.infinity
+        : (speedKmh - _lastLoggedSpeedKmh!).abs();
+    final altDelta = (_lastLoggedAltitudeM == null || altitudeM == null)
+        ? double.infinity
+        : (altitudeM - _lastLoggedAltitudeM!).abs();
+    final shouldValueLog = speedDelta >= 5.0 || altDelta >= 50.0;
+
+    if (shouldTimeLog || shouldValueLog) {
+      debugPrint(
+        'SensorDataDisplay: speed ${speedKmh.toStringAsFixed(1)} km/h, alt ${(altitudeM ?? 0).toStringAsFixed(0)} m, acc ${(accuracyM ?? 0).toStringAsFixed(1)} m',
+      );
+      _lastLogTime = now;
+      _lastLoggedSpeedKmh = speedKmh;
+      _lastLoggedAltitudeM = altitudeM;
     }
   }
 
@@ -128,20 +184,13 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
     setState(() {
       _isInitializing = true;
     });
-
-    // Check and request location permission
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    _hasLocationPermission =
-        permission == LocationPermission.whileInUse ||
-        permission == LocationPermission.always;
-
+    // Initialize LocationService (manages permissions internally)
+    final locationService = LocationService();
+    final initialized = await locationService.initialize();
+    _hasLocationPermission = initialized;
     if (_hasLocationPermission) {
-      // GPS will be controlled by charging state
-      _updateGPSState();
+      _subscribeLocationUpdates();
+      await locationService.startTracking();
       _startWeatherUpdates();
     }
 
@@ -177,76 +226,10 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
     }
   }
 
-  void _startGPSTracking() async {
-    // Don't start if already running
-    if (_positionSubscription != null) return;
-
-    try {
-      debugPrint('SensorDisplay: Starting GPS tracking with HIGH accuracy');
-
-      // Get initial position immediately with high accuracy
-      final Position initialPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy:
-            LocationAccuracy.best, // Best accuracy for speed/altitude
-        timeLimit: const Duration(seconds: 10),
-      );
-
-      if (mounted) {
-        setState(() {
-          _speed = initialPosition.speed; // m/s
-          _altitude = initialPosition.altitude; // meters
-        });
-        // Notify parent (SOS page) of speed update for movement status
-        if (widget.onSpeedUpdate != null && _speed != null) {
-          final speedKmh = _speed! * 3.6; // Convert m/s to km/h
-          widget.onSpeedUpdate!(speedKmh);
-        }
-        debugPrint(
-          'GPS Initial: Speed=$_speed m/s (${(_speed! * 3.6).toStringAsFixed(1)} km/h), Altitude=$_altitude m (${(_altitude! * 3.28084).toStringAsFixed(0)} ft)',
-        );
-      }
-
-      // Stream updates with high accuracy + time-based refresh
-      const LocationSettings locationSettings = LocationSettings(
-        accuracy:
-            LocationAccuracy.best, // Best accuracy for precise speed/altitude
-        distanceFilter: 5, // Update every 5 meters minimum
-        timeLimit: Duration(
-          seconds: 3,
-        ), // Force update every 3 seconds even if stationary
-      );
-
-      _positionSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: locationSettings,
-          ).listen((Position position) {
-            if (mounted) {
-              setState(() {
-                _speed = position.speed; // m/s
-                _altitude = position.altitude; // meters
-              });
-              // Notify parent (SOS page) of speed update for movement status
-              if (widget.onSpeedUpdate != null && _speed != null) {
-                final speedKmh = _speed! * 3.6; // Convert m/s to km/h
-                widget.onSpeedUpdate!(speedKmh);
-              }
-              debugPrint(
-                'GPS Update: Speed=${_speed!.toStringAsFixed(2)} m/s (${(_speed! * 3.6).toStringAsFixed(1)} km/h), Altitude=${_altitude!.toStringAsFixed(1)} m (${(_altitude! * 3.28084).toStringAsFixed(0)} ft), Accuracy=${position.accuracy.toStringAsFixed(1)}m',
-              );
-            }
-          });
-    } catch (e) {
-      debugPrint('GPS Error: $e');
-    }
-  }
+  // GPS tracking handled by LocationService; no direct stream here
 
   void _stopGPSTracking() {
-    if (_positionSubscription != null) {
-      debugPrint('SensorDisplay: Stopping GPS tracking');
-      _positionSubscription?.cancel();
-      _positionSubscription = null;
-      // Keep last known values instead of clearing them
-    }
+    // No-op: LocationService manages GPS lifecycle
   }
 
   void _startBarometerTracking() {
@@ -280,10 +263,15 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _positionSubscription?.cancel();
+    // No direct GPS subscription here; LocationService manages it
     _barometerSubscription?.cancel();
     _batteryStateSubscription?.cancel();
     _weatherUpdateTimer?.cancel();
+    if (_locationListener != null) {
+      try {
+        LocationService().removeLocationListener(_locationListener!);
+      } catch (_) {}
+    }
     _weatherService.stopUpdates();
     super.dispose();
   }
@@ -352,7 +340,7 @@ class _SensorDataDisplayState extends State<SensorDataDisplay>
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    'GPS paused (power save)',
+                    'Power saver',
                     style: TextStyle(
                       fontSize: 8,
                       color: AppTheme.secondaryText,

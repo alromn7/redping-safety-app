@@ -1,0 +1,465 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ==================== Helper Functions ====================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDemoData(userId) {
+      return userId == 'demo_user_123';
+    }
+    
+    function isCareTeamMember(patientId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(patientId)/medical/care_team/$(request.auth.uid));
+    }
+    
+    function isVerifiedPhysician() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/physicians/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/physicians/$(request.auth.uid)).data.verificationStatus == 'verified';
+    }
+    
+    function isOrgMember(orgId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
+    }
+    
+    function isOrgAdmin(orgId) {
+      return isOrgMember(orgId) &&
+        get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isConnectedDoctor(patientId) {
+      return isAuthenticated() &&
+             (exists(/databases/$(database)/documents/connections/$(request.auth.uid + '_' + patientId)) ||
+              exists(/databases/$(database)/documents/connections/$(patientId + '_' + request.auth.uid)));
+    }
+    
+    function isConversationParticipant(conversationId) {
+      let conversation = get(/databases/$(database)/documents/conversations/$(conversationId)).data;
+      return isAuthenticated() &&
+             (conversation.patientId == request.auth.uid ||
+              conversation.physicianId == request.auth.uid);
+    }
+    
+    // ==================== User Profiles (Shared) ====================
+    
+    // Main user document - allow authenticated users to create and update their own
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId);
+    }
+    
+    // Basic user profile - shared across both apps
+    match /users/{userId}/profile {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId);
+    }
+    
+    // User medications subcollection
+    match /users/{userId}/medications/{medId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      allow write: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      
+      // Medication history subcollection
+      match /history/{historyId} {
+        allow read: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+        allow write: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      }
+    }
+    
+    // ==================== Emergency Data (RedPing Main) ====================
+    
+    // Emergency contacts
+    match /users/{userId}/emergency/contacts/{contactId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId);
+    }
+    
+    // SOS sessions
+    match /users/{userId}/emergency/sos_sessions/{sessionId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId);
+      // Only system can update/delete via Cloud Functions
+      allow update, delete: if false;
+    }
+    
+    // ==================== Medical Data (RedPing Doctor Plus) ====================
+    
+    // Medical profile document
+    match /users/{userId}/medical/profile {
+      allow read: if isOwner(userId) || isCareTeamMember(userId);
+      allow write: if isOwner(userId);
+    }
+    
+    // Medications
+    match /users/{userId}/medical/medications/{medId} {
+      allow read: if isOwner(userId) || isCareTeamMember(userId);
+      allow write: if isOwner(userId);
+    }
+    
+    // Appointments
+    match /users/{userId}/medical/appointments/{apptId} {
+      allow read: if isOwner(userId) || isCareTeamMember(userId);
+      allow write: if isOwner(userId);
+    }
+    
+    // Vitals logs (BP, HR, weight)
+    match /users/{userId}/medical/vitals/{vitalId} {
+      allow read: if isOwner(userId) || isCareTeamMember(userId);
+      allow create: if isOwner(userId);
+      // Prevent editing historical vitals
+      allow update, delete: if false;
+    }
+    
+    // Recovery journeys
+    match /users/{userId}/medical/recovery_journeys/{journeyId} {
+      allow read: if isOwner(userId) || isCareTeamMember(userId);
+      allow create: if isCareTeamMember(userId) && isVerifiedPhysician();
+      allow update: if isOwner(userId) || (isCareTeamMember(userId) && isVerifiedPhysician());
+      allow delete: if isCareTeamMember(userId) && isVerifiedPhysician();
+      
+      // Physician notes within recovery journey
+      match /notes/{noteId} {
+        allow read: if isOwner(userId) || isCareTeamMember(userId);
+        allow create: if isCareTeamMember(userId) && isVerifiedPhysician();
+        // Notes are immutable once created (audit trail)
+        allow update, delete: if false;
+      }
+    }
+    
+    // Care team members
+    match /users/{userId}/medical/care_team/{providerId} {
+      allow read: if isOwner(userId) || providerId == request.auth.uid;
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) || providerId == request.auth.uid;
+      allow delete: if isOwner(userId);
+    }
+    
+    // HIPAA/GDPR consents - main document
+    match /users/{userId}/medical/consents/{consentId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId);
+      allow delete: if false; // Audit trail protection
+    }
+    
+    // HIPAA/GDPR consent items subcollection (direct under consents doc)
+    match /users/{userId}/medical/consents/items/{itemId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId);
+      // Consents are immutable once created (audit trail)
+      allow update, delete: if false;
+    }
+    
+    // Health Index calculations
+    match /users/{userId}/medical/health_index/{indexId} {
+      allow read: if isOwner(userId) || isCareTeamMember(userId);
+      // Only system can write via Cloud Functions
+      allow write: if false;
+    }
+    
+    // ==================== Physicians Collection ====================
+    
+    match /physicians/{physicianId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(physicianId);
+      allow update: if isOwner(physicianId);
+      allow delete: if isOwner(physicianId);
+      
+      // Physician verification documents
+      match /verifications/{verificationId} {
+        allow read: if isOwner(physicianId);
+        allow create: if isOwner(physicianId);
+        // Only admin can update verification status (via Cloud Functions)
+        allow update, delete: if false;
+      }
+      
+      // Linked patients (access permissions)
+      match /patients/{patientId} {
+        allow read: if isOwner(physicianId);
+        allow write: if isOwner(physicianId);
+      }
+    }
+    
+    // ==================== Organizations (Ultra Tier) ====================
+    
+    match /organizations/{orgId} {
+      allow read: if isOrgMember(orgId);
+      allow write: if isOrgAdmin(orgId);
+      
+      // Organization settings
+      match /settings/{settingId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgAdmin(orgId);
+      }
+      
+      // Organization members
+      match /members/{memberId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isOrgAdmin(orgId);
+      }
+      
+      // Analytics data
+      match /analytics/{analyticsId} {
+        allow read: if isOrgMember(orgId);
+        // Only system can write via Cloud Functions
+        allow write: if false;
+      }
+    }
+    
+    // ==================== Audit Logs (Immutable) ====================
+    
+    match /audit_logs/{logId} {
+      allow read: if isOwner(resource.data.userId) || isCareTeamMember(resource.data.userId);
+      // Only system can write via Cloud Functions
+      allow write: if false;
+    }
+    
+    // ==================== Notifications ====================
+    
+    match /notifications/{userId}/messages/{messageId} {
+      allow read: if isOwner(userId);
+      allow create: if isAuthenticated();
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+    
+    // ==================== Root-Level Collections (For AI & Demo Data) ====================
+    
+    // Medical profiles (root collection)
+    match /medical_profiles/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      allow write: if isOwner(userId);
+    }
+    
+    // Vitals (root collection)
+    match /vitals/{vitalId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable audit trail
+    }
+    
+    // Medications (root collection)
+    match /medications/{medId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Appointments (root collection)
+    match /appointments/{apptId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Sleep sessions (root collection)
+    match /sleep_sessions/{sessionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // AI Conversations
+    match /ai_conversations/{userId} {
+      allow read, write: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      
+      match /messages/{messageId} {
+        allow read, write: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      }
+    }
+    
+    // Health Insights
+    match /health_insights/{insightId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+    
+    // ==================== Doctor Connect Features ====================
+    
+    // Physician profiles - Public directory
+    match /physician_profiles/{profileId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+    
+    // Connection requests
+    match /connection_requests/{requestId} {
+      // Allow read for queries with proper filters
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.fromUserId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                       (resource.data.toUserId == request.auth.uid ||
+                        isDemoData(resource.data.toUserId));
+      allow delete: if isAuthenticated() &&
+                       (resource.data.fromUserId == request.auth.uid ||
+                        resource.data.toUserId == request.auth.uid ||
+                        isDemoData(resource.data.fromUserId) ||
+                        isDemoData(resource.data.toUserId));
+    }
+    
+    // Connections - Bidirectional physician connections
+    match /connections/{connectionId} {
+      // Allow read for queries with proper filters
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       (resource.data.user1Id == request.auth.uid ||
+                        resource.data.user2Id == request.auth.uid ||
+                        isDemoData(resource.data.user1Id) ||
+                        isDemoData(resource.data.user2Id));
+      allow delete: if isAuthenticated() &&
+                       (resource.data.user1Id == request.auth.uid ||
+                        resource.data.user2Id == request.auth.uid ||
+                        isDemoData(resource.data.user1Id) ||
+                        isDemoData(resource.data.user2Id));
+    }
+    
+    // Conversations
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated() &&
+                     (resource.data.patientId == request.auth.uid ||
+                      resource.data.physicianId == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       (resource.data.patientId == request.auth.uid ||
+                        resource.data.physicianId == request.auth.uid);
+      allow delete: if false;
+      
+      // Messages subcollection
+      match /messages/{messageId} {
+        allow read: if isConversationParticipant(conversationId);
+        allow create: if isAuthenticated() &&
+                         request.resource.data.senderId == request.auth.uid;
+        allow update: if isAuthenticated() &&
+                         resource.data.recipientId == request.auth.uid &&
+                         request.resource.data.keys().hasOnly(['isRead']);
+        allow delete: if false;
+      }
+    }
+    
+    // Patients collection - Extended patient profiles for doctor portal
+    match /patients/{patientId} {
+      allow read: if isAuthenticated() &&
+                     (resource.data.assignedPhysicianId == request.auth.uid ||
+                      isConnectedDoctor(patientId));
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       (resource.data.assignedPhysicianId == request.auth.uid ||
+                        isConnectedDoctor(patientId));
+      allow delete: if false;
+      
+      // Patient vital signs subcollection
+      match /vital_signs/{vitalId} {
+        allow read: if isAuthenticated() &&
+                       (get(/databases/$(database)/documents/patients/$(patientId)).data.assignedPhysicianId == request.auth.uid ||
+                        isConnectedDoctor(patientId));
+        allow create: if isAuthenticated();
+        allow update, delete: if false;
+      }
+    }
+    
+    // Live vitals monitoring
+    match /live_vitals/{sessionId} {
+      allow read: if isAuthenticated() &&
+                     (resource.data.patientId == request.auth.uid ||
+                      resource.data.physicianId == request.auth.uid ||
+                      isConnectedDoctor(resource.data.patientId));
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       (resource.data.patientId == request.auth.uid ||
+                        resource.data.physicianId == request.auth.uid);
+      allow delete: if isAuthenticated() &&
+                       resource.data.patientId == request.auth.uid;
+    }
+    
+    // Referrals
+    match /referrals/{referralId} {
+      allow read: if isAuthenticated() &&
+                     (resource.data.fromPhysicianId == request.auth.uid ||
+                      resource.data.toPhysicianId == request.auth.uid ||
+                      resource.data.patientId == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       (resource.data.fromPhysicianId == request.auth.uid ||
+                        resource.data.toPhysicianId == request.auth.uid);
+      allow delete: if false;
+    }
+    
+    // Collaborations
+    match /collaborations/{collaborationId} {
+      allow read: if isAuthenticated() &&
+                     (request.auth.uid in resource.data.physicianIds ||
+                      resource.data.patientId == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       request.auth.uid in resource.data.physicianIds;
+      allow delete: if false;
+    }
+    
+    // ==================== Medical IDs ====================
+    
+    // Medical IDs - Emergency medical information cards
+    match /medical_ids/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+      allow write: if isAuthenticated() && (isOwner(userId) || isDemoData(userId));
+    }
+    
+    // ==================== Prescription Refills ====================
+    
+    // Prescription refills
+    match /prescription_refills/{refillId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid;
+    }
+    
+    // ==================== Recovery Journeys (Root Collection) ====================
+    
+    // Recovery journeys - root collection for physician access
+    match /recovery_journeys/{journeyId} {
+      allow read: if isAuthenticated() &&
+                     (resource.data.patientId == request.auth.uid ||
+                      resource.data.physicianId == request.auth.uid ||
+                      isConnectedDoctor(resource.data.patientId));
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                       (resource.data.patientId == request.auth.uid ||
+                        resource.data.physicianId == request.auth.uid);
+      allow delete: if isAuthenticated() &&
+                       resource.data.physicianId == request.auth.uid;
+    }
+    
+    // ==================== Root-Level Emergency Collections (Website Dashboard) ====================
+    
+    // SOS Sessions - Root collection for website emergency dashboard
+    match /sos_sessions/{sessionId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+    
+    // SAR Sessions - Root collection for SAR coordination and website dashboard
+    match /sar_sessions/{sessionId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if false;
+    }
+  }
+}

@@ -47,48 +47,27 @@ class MessagingIntegrationService {
   }
 
   /// Set up message routing between all messaging services
+  /// INFINITE LOOP FIX: MessageEngine now handles all routing with global deduplication
   void _setupMessageRouting() {
-    // TEMPORARILY DISABLED to prevent infinite message loops and crashes
-    // TODO: Fix the message routing system properly
-    /*
-    // Route messages from emergency messaging service to SAR messaging service
+    // Route messages from both services to unified stream
+    // The underlying MessageEngine ensures no infinite loops via deduplication
+
     _emergencyMessagingService.messagesStream.listen((messages) {
       for (final message in messages) {
-        if (message.type == MessageType.emergency ||
-            message.type == MessageType.userResponse) {
-          // Route to SAR messaging service
-          _sarMessagingService.receiveMessageFromSOSUser(
-            sosUserId: message.senderId,
-            sosUserName: message.senderName,
-            content: message.content,
-            priority: message.priority,
-            metadata: message.metadata,
-          );
-        }
         _messageStreamController.add(message);
       }
     });
 
-    // Route messages from SAR messaging service to emergency messaging service
     _sarMessagingService.messageReceivedStream.listen((message) {
-      _emergencyMessagingService.receiveMessageFromSAR(
-        senderId: message.senderId,
-        senderName: message.senderName,
-        content: message.content,
-        priority: message.priority,
-        type: message.type,
-        metadata: message.metadata,
-      );
       _messageStreamController.add(message);
     });
 
     _sarMessagingService.messageSentStream.listen((message) {
       _messageStreamController.add(message);
     });
-    */
 
     debugPrint(
-      'MessagingIntegrationService: Message routing DISABLED to prevent crashes',
+      'MessagingIntegrationService: Message routing enabled with deduplication',
     );
   }
 

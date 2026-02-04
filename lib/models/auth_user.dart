@@ -36,6 +36,15 @@ class AuthUser extends Equatable {
   /// Convenience getter to determine whether the current user is not empty
   bool get isNotEmpty => this != AuthUser.empty;
 
+  /// Check if user is a developer (alromn7@gmail.com)
+  bool get isDeveloper => email == 'alromn7@gmail.com';
+
+  /// Check if user has admin access (developers have full admin access)
+  bool get isAdmin => isDeveloper;
+
+  /// Check if user has access to admin features
+  bool get hasAdminAccess => isAdmin;
+
   AuthUser copyWith({
     String? id,
     String? email,

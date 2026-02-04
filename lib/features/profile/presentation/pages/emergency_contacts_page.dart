@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../models/emergency_contact.dart';
 import '../../../../services/emergency_contacts_service.dart';
+import '../../../../services/magic_link_service.dart';
 
 /// Emergency contacts management page
 class EmergencyContactsPage extends StatefulWidget {
@@ -26,7 +27,12 @@ class _EmergencyContactsPageState extends State<EmergencyContactsPage> {
     try {
       await _contactsService.initialize();
       setState(() {
-        _contacts = _contactsService.contacts;
+        // Emergency services is handled via a separate manual hotline UI.
+        // Do not show it in personal contacts management.
+        _contacts =
+            _contactsService.contacts
+                .where((c) => c.type != ContactType.emergencyServices)
+                .toList();
         _isLoading = false;
       });
     } catch (e) {
@@ -190,6 +196,17 @@ class _EmergencyContactsPageState extends State<EmergencyContactsPage> {
                     ],
                   ),
                 ),
+                if (contact.email != null && contact.email!.isNotEmpty)
+                  const PopupMenuItem(
+                    value: 'magic_link',
+                    child: Row(
+                      children: [
+                        Icon(Icons.mark_email_read, size: 16),
+                        SizedBox(width: 8),
+                        Text('Invite via Magic Link'),
+                      ],
+                    ),
+                  ),
                 PopupMenuItem(
                   value: 'toggle',
                   child: Row(
@@ -238,12 +255,45 @@ class _EmergencyContactsPageState extends State<EmergencyContactsPage> {
       case 'edit':
         _showEditContactDialog(contact);
         break;
+      case 'magic_link':
+        _sendMagicLinkInvite(contact);
+        break;
       case 'toggle':
         _toggleContact(contact);
         break;
       case 'delete':
         _showDeleteConfirmation(contact);
         break;
+    }
+  }
+
+  Future<void> _sendMagicLinkInvite(EmergencyContact contact) async {
+    final email = contact.email;
+    if (email == null || email.isEmpty) {
+      _showErrorDialog('This contact has no email address.');
+      return;
+    }
+    try {
+      final ok = await MagicLinkService().sendMagicLinkToEmail(email);
+      if (ok) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Invitation Sent'),
+            content: Text('A passwordless sign-in link was sent to $email.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        _showErrorDialog('Failed to send magic link to $email.');
+      }
+    } catch (e) {
+      _showErrorDialog('Error sending magic link: $e');
     }
   }
 
@@ -340,7 +390,9 @@ class _EmergencyContactsPageState extends State<EmergencyContactsPage> {
                     labelText: 'Type',
                     border: OutlineInputBorder(),
                   ),
-                  items: ContactType.values.map((type) {
+                  items: ContactType.values
+                      .where((type) => type != ContactType.emergencyServices)
+                      .map((type) {
                     return DropdownMenuItem(
                       value: type,
                       child: Row(

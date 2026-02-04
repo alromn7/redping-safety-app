@@ -1,7 +1,9 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:math';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/entitlements/entitlement_service.dart';
 import '../../../../models/gadget_device.dart';
 import '../../../../services/gadget_integration_service.dart';
 import 'package:go_router/go_router.dart';
@@ -12,10 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 class FindMyGadgetPage extends StatefulWidget {
   final GadgetDevice device;
 
-  const FindMyGadgetPage({
-    super.key,
-    required this.device,
-  });
+  const FindMyGadgetPage({super.key, required this.device});
 
   @override
   State<FindMyGadgetPage> createState() => _FindMyGadgetPageState();
@@ -31,7 +30,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
   bool _isLostModeEnabled = false;
   bool _isLoading = true;
   StreamSubscription<Position>? _locationSubscription;
-  List<Position> _locationHistory = [];
+  final List<Position> _locationHistory = [];
   DateTime? _lastLocationUpdate;
   // Low-power ping fields
   bool _isPinging = false;
@@ -58,7 +57,8 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
       // Get last known location from device metadata
       final metadata = widget.device.metadata ?? {};
       if (metadata.containsKey('lastKnownLocation')) {
-        final locationData = metadata['lastKnownLocation'] as Map<String, dynamic>;
+        final locationData =
+            metadata['lastKnownLocation'] as Map<String, dynamic>;
         _lastKnownLocation = Position(
           latitude: locationData['latitude'] as double,
           longitude: locationData['longitude'] as double,
@@ -82,11 +82,16 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
         _lastPingCode = metadata['lastPingCode'] as String;
       }
       if (metadata['lastPingAt'] is String) {
-        try { _lastPingAt = DateTime.parse(metadata['lastPingAt'] as String); } catch (_) {}
+        try {
+          _lastPingAt = DateTime.parse(metadata['lastPingAt'] as String);
+        } catch (_) {}
       }
       if (metadata['pingHistory'] is List) {
         final rawList = metadata['pingHistory'] as List;
-        _pingHistory = rawList.whereType<Map>().map((m) => m.cast<String, dynamic>()).toList();
+        _pingHistory = rawList
+            .whereType<Map>()
+            .map((m) => m.cast<String, dynamic>())
+            .toList();
       }
 
       // Removed auto-start live tracking for battery savings. User can start manually or ping.
@@ -114,48 +119,53 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
       }
 
       _locationSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 10,
-        ),
+        locationSettings: Platform.isAndroid
+            ? AndroidSettings(
+                accuracy: LocationAccuracy.bestForNavigation,
+                distanceFilter: 10,
+                forceLocationManager: true,
+              )
+            : const LocationSettings(
+                accuracy: LocationAccuracy.bestForNavigation,
+                distanceFilter: 10,
+              ),
       ).listen((position) {
-        if (mounted) {
-          setState(() {
-            _currentLocation = position;
-            _lastLocationUpdate = position.timestamp;
-            _locationHistory.add(position);
+            if (mounted) {
+              setState(() {
+                _currentLocation = position;
+                _lastLocationUpdate = position.timestamp;
+                _locationHistory.add(position);
 
-            // Keep only last 50 locations
-            if (_locationHistory.length > 50) {
-              _locationHistory.removeAt(0);
+                // Keep only last 50 locations
+                if (_locationHistory.length > 50) {
+                  _locationHistory.removeAt(0);
+                }
+              });
+
+              // Persist latest location to gadget metadata
+              try {
+                final currentMeta = widget.device.metadata ?? {};
+                final updated = widget.device.copyWith(
+                  metadata: {
+                    ...currentMeta,
+                    'lastKnownLocation': {
+                      'latitude': position.latitude,
+                      'longitude': position.longitude,
+                      // position.timestamp is non-null (SDK guarantees), so just use it
+                      'timestamp': position.timestamp.toIso8601String(),
+                      'accuracy': position.accuracy,
+                      'altitude': position.altitude,
+                      'heading': position.heading,
+                      'speed': position.speed,
+                    },
+                  },
+                );
+                _gadgetService.updateDevice(updated);
+              } catch (e) {
+                debugPrint('FindMyGadgetPage: Failed to persist location - $e');
+              }
             }
           });
-
-          // Persist latest location to gadget metadata
-          try {
-            final currentMeta = widget.device.metadata ?? {};
-            final updated = widget.device.copyWith(
-              metadata: {
-                ...currentMeta,
-                'lastKnownLocation': {
-                  'latitude': position.latitude,
-                  'longitude': position.longitude,
-                  // position.timestamp is non-null (SDK guarantees), so just use it
-                  'timestamp': position.timestamp.toIso8601String(),
-                  'accuracy': position.accuracy,
-                  'altitude': position.altitude,
-                  'heading': position.heading,
-                  'speed': position.speed,
-                },
-              },
-            );
-            _gadgetService.updateDevice(updated);
-          } catch (e) {
-            debugPrint('FindMyGadgetPage: Failed to persist location - $e');
-          }
-        }
-      });
-
     } catch (e) {
       debugPrint('FindMyGadgetPage: Error starting tracking - $e');
       _showSnackBar('Failed to start live tracking');
@@ -181,7 +191,8 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
       }
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        // GPS-first to avoid Wi‑Fi accuracy prompts
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
       );
       setState(() {
         _currentLocation = position;
@@ -206,7 +217,11 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
           },
           'lastPingCode': pingCode,
           'lastPingAt': DateTime.now().toIso8601String(),
-          'pingHistory': _buildUpdatedPingHistory(currentMeta['pingHistory'], position, pingCode),
+          'pingHistory': _buildUpdatedPingHistory(
+            currentMeta['pingHistory'],
+            position,
+            pingCode,
+          ),
         },
       );
       await _gadgetService.updateDevice(updated);
@@ -214,7 +229,11 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
         _lastPingCode = pingCode;
         _lastPingAt = DateTime.now();
         // Rebuild local ping history for display
-        _pingHistory = _buildUpdatedPingHistory(currentMeta['pingHistory'], position, pingCode);
+        _pingHistory = _buildUpdatedPingHistory(
+          currentMeta['pingHistory'],
+          position,
+          pingCode,
+        );
       });
       _showSnackBar('Ping complete. Code: $pingCode');
     } catch (e) {
@@ -231,10 +250,17 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
     return List.generate(6, (_) => chars[rand.nextInt(chars.length)]).join();
   }
 
-  List<Map<String, dynamic>> _buildUpdatedPingHistory(dynamic existing, Position pos, String code) {
+  List<Map<String, dynamic>> _buildUpdatedPingHistory(
+    dynamic existing,
+    Position pos,
+    String code,
+  ) {
     List<Map<String, dynamic>> list = [];
     if (existing is List) {
-      list = existing.whereType<Map>().map((m) => m.cast<String, dynamic>()).toList();
+      list = existing
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList();
     }
     list.add({
       'timestamp': DateTime.now().toIso8601String(),
@@ -335,9 +361,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
       );
       await _gadgetService.updateDevice(updatedDevice);
       _showSnackBar(
-        _isLostModeEnabled
-            ? 'Lost Mode enabled'
-            : 'Lost Mode disabled',
+        _isLostModeEnabled ? 'Lost Mode enabled' : 'Lost Mode disabled',
       );
     } catch (e) {
       debugPrint('FindMyGadgetPage: Error toggling lost mode - $e');
@@ -434,9 +458,11 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
       final location = _currentLocation ?? _lastKnownLocation!;
       final lat = location.latitude;
       final lng = location.longitude;
-      
+
       // Open Google Maps with directions
-      final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
+      final url = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng',
+      );
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
       } else {
@@ -470,10 +496,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
             const Text('Find My Gadget', style: TextStyle(color: Colors.white)),
             Text(
               widget.device.name,
-              style: TextStyle(
-                color: AppTheme.neutralGray,
-                fontSize: 14,
-              ),
+              style: TextStyle(color: AppTheme.neutralGray, fontSize: 14),
             ),
           ],
         ),
@@ -490,18 +513,26 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
             )
           else if (widget.device.isOnline &&
               widget.device.hasCapability(GadgetCapability.locationTracking))
-              Row(children: [
+            Row(
+              children: [
                 IconButton(
-                  icon: const Icon(Icons.play_arrow, color: AppTheme.accentGreen),
+                  icon: const Icon(
+                    Icons.play_arrow,
+                    color: AppTheme.accentGreen,
+                  ),
                   onPressed: _startLiveTracking,
                   tooltip: 'Start Live Tracking (higher battery use)',
                 ),
                 IconButton(
-                  icon: const Icon(Icons.info_outline, color: AppTheme.neutralGray),
+                  icon: const Icon(
+                    Icons.info_outline,
+                    color: AppTheme.neutralGray,
+                  ),
                   onPressed: _showTrackingInfo,
                   tooltip: 'Tracking Mode Info',
                 ),
-              ]),
+              ],
+            ),
         ],
       ),
       body: _isLoading
@@ -534,7 +565,9 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
         border: Border.all(
           color: _isLostModeEnabled
               ? AppTheme.primaryRed
-              : (widget.device.isOnline ? AppTheme.accentGreen : AppTheme.borderColor),
+              : (widget.device.isOnline
+                    ? AppTheme.accentGreen
+                    : AppTheme.borderColor),
         ),
       ),
       child: Column(
@@ -545,10 +578,14 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
               Icon(
                 _isLostModeEnabled
                     ? Icons.warning
-                    : (widget.device.isOnline ? Icons.location_on : Icons.location_off),
+                    : (widget.device.isOnline
+                          ? Icons.location_on
+                          : Icons.location_off),
                 color: _isLostModeEnabled
                     ? AppTheme.primaryRed
-                    : (widget.device.isOnline ? AppTheme.accentGreen : AppTheme.neutralGray),
+                    : (widget.device.isOnline
+                          ? AppTheme.accentGreen
+                          : AppTheme.neutralGray),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -558,7 +595,9 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
                     Text(
                       _isLostModeEnabled
                           ? 'Lost Mode Active'
-                          : (widget.device.isOnline ? 'Device Online' : 'Device Offline'),
+                          : (widget.device.isOnline
+                                ? 'Device Online'
+                                : 'Device Offline'),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -586,7 +625,10 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
               ),
               if (_isTracking)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: AppTheme.accentGreen.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
@@ -638,7 +680,9 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
                     'Accuracy',
                     '±${location.accuracy.toStringAsFixed(0)}m',
                   ),
-                  if (widget.device.hasCapability(GadgetCapability.batteryLevel)) ...[
+                  if (widget.device.hasCapability(
+                    GadgetCapability.batteryLevel,
+                  )) ...[
                     const SizedBox(height: 4),
                     _buildInfoRow(
                       Icons.battery_std,
@@ -650,17 +694,30 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
                     const Divider(height: 16, color: Colors.grey),
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Recent Pings', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Recent Pings',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 4),
                     ..._pingHistory.reversed.take(3).map((p) {
                       DateTime? ts;
-                      try { ts = DateTime.parse(p['timestamp'] as String); } catch (_) {}
+                      try {
+                        ts = DateTime.parse(p['timestamp'] as String);
+                      } catch (_) {}
                       final age = _getTimeAgo(ts);
                       final code = p['code'];
                       final acc = p['accuracy'];
-                      return _buildInfoRow(Icons.bolt, 'Ping $code', '$age • ±${(acc as double).toStringAsFixed(0)}m');
-                    }).toList(),
+                      return _buildInfoRow(
+                        Icons.bolt,
+                        'Ping $code',
+                        '$age • ±${(acc as double).toStringAsFixed(0)}m',
+                      );
+                    }),
                   ],
                 ],
               ),
@@ -678,10 +735,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
         const SizedBox(width: 6),
         Text(
           label,
-          style: TextStyle(
-            color: AppTheme.neutralGray,
-            fontSize: 12,
-          ),
+          style: TextStyle(color: AppTheme.neutralGray, fontSize: 12),
         ),
         const Spacer(),
         Text(
@@ -706,11 +760,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.location_off,
-                size: 64,
-                color: AppTheme.neutralGray,
-              ),
+              Icon(Icons.location_off, size: 64, color: AppTheme.neutralGray),
               const SizedBox(height: 16),
               Text(
                 'No Location Data',
@@ -723,10 +773,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
               const SizedBox(height: 8),
               Text(
                 'Device location is not available',
-                style: TextStyle(
-                  color: AppTheme.neutralGray,
-                  fontSize: 14,
-                ),
+                style: TextStyle(color: AppTheme.neutralGray, fontSize: 14),
               ),
             ],
           ),
@@ -819,10 +866,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
         const SizedBox(width: 8),
         Text(
           label,
-          style: TextStyle(
-            color: AppTheme.neutralGray,
-            fontSize: 14,
-          ),
+          style: TextStyle(color: AppTheme.neutralGray, fontSize: 14),
         ),
         const Spacer(),
         Text(
@@ -842,9 +886,7 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppTheme.cardBackground,
-        border: Border(
-          top: BorderSide(color: AppTheme.borderColor),
-        ),
+        border: Border(top: BorderSide(color: AppTheme.borderColor)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -855,7 +897,11 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
                 child: ElevatedButton.icon(
                   onPressed: _toggleLostMode,
                   icon: Icon(_isLostModeEnabled ? Icons.lock_open : Icons.lock),
-                  label: Text(_isLostModeEnabled ? 'Disable Lost Mode' : 'Enable Lost Mode'),
+                  label: Text(
+                    _isLostModeEnabled
+                        ? 'Disable Lost Mode'
+                        : 'Enable Lost Mode',
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _isLostModeEnabled
                         ? AppTheme.accentGreen
@@ -884,7 +930,8 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: widget.device.hasCapability(GadgetCapability.speaker)
+                  onPressed:
+                      widget.device.hasCapability(GadgetCapability.speaker)
                       ? _playSound
                       : null,
                   icon: const Icon(Icons.volume_up, size: 18),
@@ -898,7 +945,8 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: _currentLocation != null || _lastKnownLocation != null
+                  onPressed:
+                      _currentLocation != null || _lastKnownLocation != null
                       ? _getDirections
                       : null,
                   icon: const Icon(Icons.directions, size: 18),
@@ -964,7 +1012,10 @@ class _FindMyGadgetPageState extends State<FindMyGadgetPage> {
           'Ping Location performs a one-time precise location fetch and stores a short code without continuous battery drain.\n\nLive Tracking subscribes to continuous updates (higher battery usage). Use it only when actively recovering a device.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );

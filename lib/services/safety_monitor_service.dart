@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart';
+import '../models/sos_session.dart';
 import '../core/constants/app_constants.dart';
 import 'location_service.dart';
 import 'notification_service.dart';
@@ -18,7 +18,7 @@ class SafetyMonitorService {
   NotificationService? _notificationService;
 
   // Streaming
-  StreamSubscription<Position>? _positionSub;
+  Function(LocationInfo)? _locationListener;
 
   // State
   bool _isInitialized = false;
@@ -58,17 +58,12 @@ class SafetyMonitorService {
 
   Future<void> startMonitoring() async {
     if (_isMonitoring) return;
-    // Use a lightweight position stream for speed/altitude only
     try {
-      final settings = const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // meters
-      );
-
-      _positionSub = Geolocator.getPositionStream(locationSettings: settings)
-          .listen(_handlePosition,
-              onError: (e) => debugPrint('SafetyMonitor: position error - $e'));
-
+      final ls = LocationService();
+      await ls.initialize();
+      _locationListener = (LocationInfo li) => _handleLocation(li);
+      ls.addLocationListener(_locationListener!);
+      await ls.startTracking();
       _isMonitoring = true;
       debugPrint('SafetyMonitor: Monitoring started');
     } catch (e) {
@@ -77,16 +72,22 @@ class SafetyMonitorService {
   }
 
   void stopMonitoring() {
-    _positionSub?.cancel();
-    _positionSub = null;
+    if (_locationListener != null) {
+      try {
+        LocationService().removeLocationListener(_locationListener!);
+      } catch (_) {}
+      _locationListener = null;
+    }
     _isMonitoring = false;
     _altitudeWindow.clear();
     debugPrint('SafetyMonitor: Monitoring stopped');
   }
-
-  void _handlePosition(Position p) {
+ 
+  void _handleLocation(LocationInfo info) {
     // Speed logic (m/s)
-    final double speed = (p.speed.isFinite && p.speed >= 0) ? p.speed : 0.0;
+    final double speed = (info.speed != null && info.speed!.isFinite && info.speed! >= 0)
+        ? info.speed!
+        : 0.0;
     final double crit = AppConstants.criticalSpeedMps;
     final double hyster = AppConstants.criticalSpeedHysteresisMps;
 
@@ -102,7 +103,9 @@ class SafetyMonitorService {
 
     // Altitude logic (relative gain in a rolling window)
     final now = DateTime.now();
-    final double altitude = p.altitude.isFinite ? p.altitude : 0.0;
+    final double altitude = (info.altitude != null && info.altitude!.isFinite)
+      ? info.altitude!
+      : 0.0;
     _altitudeWindow.addLast(_AltitudePoint(t: now, alt: altitude));
 
     // Evict old samples

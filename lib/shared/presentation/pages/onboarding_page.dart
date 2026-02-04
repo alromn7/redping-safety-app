@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/routing/app_router.dart';
+import '../../../core/app/app_launch_config.dart';
+import '../../../services/onboarding_prefs.dart';
 
 /// Onboarding flow for new users
 class OnboardingPage extends StatefulWidget {
@@ -74,12 +76,18 @@ class _OnboardingPageState extends State<OnboardingPage> {
   }
 
   void _completeOnboarding() {
-    // Save onboarding completion status
-    context.go(AppRouter.main);
+    _persistAndExit();
   }
 
   void _skipOnboarding() {
-    context.go(AppRouter.main);
+    _persistAndExit();
+  }
+
+  Future<void> _persistAndExit() async {
+    final router = GoRouter.of(context);
+    await OnboardingPrefs.instance.setCompleted(true);
+    if (!mounted) return;
+    router.go(AppLaunchConfig.homeRoute);
   }
 
   @override

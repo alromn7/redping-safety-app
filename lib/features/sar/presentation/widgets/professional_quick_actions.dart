@@ -18,6 +18,15 @@ class ProfessionalQuickActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    void showMessagingNotAvailable() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Messaging is not available in-app in this build.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -109,11 +118,11 @@ class ProfessionalQuickActions extends StatelessWidget {
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildActionButton(
-                      'Team Chat',
-                      'Open team communication',
-                      Icons.chat,
-                      AppTheme.primaryRed,
-                      onTeamChat,
+                      'Messaging (Web Only)',
+                      'Not available in-app in this build',
+                      Icons.public,
+                      AppTheme.neutralGray,
+                      showMessagingNotAvailable,
                     ),
                   ),
                 ],

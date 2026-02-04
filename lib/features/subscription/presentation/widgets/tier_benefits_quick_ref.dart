@@ -38,7 +38,7 @@ class TierBenefitsQuickRef extends StatelessWidget {
               Icons.person,
               [
                 'RedPing 1-Tap Help (unlimited)',
-                'Community Chat',
+                'Community (website only)',
                 'Quick Call',
                 'Basic Map',
                 'Manual SOS only',
@@ -74,7 +74,6 @@ class TierBenefitsQuickRef extends StatelessWidget {
               Icons.star,
               [
                 '✨ RedPing Mode (Activity-based) (NEW)',
-                '✨ AI Safety Assistant - 24 commands (NEW)',
                 '✨ Full SAR Dashboard Access (NEW)',
                 '✨ Gadget Integration (NEW)',
                 'Everything in Essential+',
@@ -112,7 +111,7 @@ class TierBenefitsQuickRef extends StatelessWidget {
                 '✨ 1 Pro + 3 Essential+ accounts (NEW)',
                 '✨ Family Dashboard (NEW)',
                 '✨ Family Location Sharing (NEW)',
-                '✨ Family Chat (NEW)',
+                '✨ Family Portal Messaging (not in-app)',
                 'Save \$4.96/month vs individual',
                 'Perfect for families of 4',
               ],

@@ -31,6 +31,11 @@ dependencies:
   url_launcher: ^6.2.1
   # location: ^6.0.0  # REMOVED: Phase 2 - duplicate of geolocator, not used in codebase
   geocoding: ^3.0.0
+  flutter_map: ^7.0.0
+  latlong2: ^0.9.1
+  
+  # Deep Linking
+  app_links: ^3.5.0
   
   # Sensors & Hardware
   sensors_plus: ^6.1.0
@@ -41,7 +46,7 @@ dependencies:
   
   # Communication & Networking
   http: ^1.2.2
-  web_socket_channel: ^3.0.1
+  # web_socket_channel: ^3.0.1  # REMOVED: Community chat removed - available on website only
   connectivity_plus: ^6.1.0
   
   # Storage & Database
@@ -55,6 +60,8 @@ dependencies:
   # Security & Encryption
   crypto: ^3.0.6
   encrypt: ^5.0.3
+  pointycastle: ^3.7.4
+  cryptography: ^2.7.0
   
   # Payment Processing
   flutter_stripe: ^11.1.0
@@ -65,13 +72,16 @@ dependencies:
   permission_handler: ^11.0.1
   file_picker: ^8.1.2
   
+  # OCR / Text Recognition for document scanning (prescriptions, appointment cards)
+  google_mlkit_text_recognition: ^0.13.0
+  
   # Bluetooth & Device Scanning
   # flutter_blue_plus: ^1.32.4  # REMOVED: Phase 1 - gadgets feature rarely used
   mobile_scanner: ^5.0.0
   
   # AI & Speech Recognition
   # speech_to_text: ^7.0.0  # REMOVED: Phase 1 - already commented out as broken
-  # flutter_tts: ^4.2.0  # REMOVED: Phase 1 - deprecated/unused
+  flutter_tts: ^4.2.0  # RE-ENABLED: Needed for onboarding tutorial narration
   android_intent_plus: ^5.1.0
   quick_actions: ^1.1.0
   google_generative_ai: ^0.4.6
@@ -80,6 +90,8 @@ dependencies:
   firebase_messaging: ^15.2.10
   flutter_local_notifications: ^18.0.1
   cloud_functions: ^5.0.4
+  timezone: ^0.9.4
+  flutter_timezone: ^5.0.1
   
   # Utilities
   uuid: ^4.5.1

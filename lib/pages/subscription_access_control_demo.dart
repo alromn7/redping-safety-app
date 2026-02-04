@@ -103,13 +103,13 @@ class _SubscriptionAccessControlDemoState
 
             const SizedBox(height: 12),
 
-            // AI Assistant Test
+            // Hazard Alerts Test
             _buildFeatureTest(
-              'AI Assistant',
-              'aiAssistant',
-              'Personal safety assistant and app navigation',
-              Icons.psychology,
-              AppTheme.successGreen,
+              'Hazard Alerts',
+              'hazardAlerts',
+              'Official and community hazard alerts',
+              Icons.warning,
+              AppTheme.warningOrange,
             ),
 
             const SizedBox(height: 12),
@@ -187,14 +187,14 @@ class _SubscriptionAccessControlDemoState
 
             // Example of FeatureProtectedWidget
             FeatureProtectedWidget(
-              feature: 'aiAssistant',
-              customUpgradeMessage: 'Upgrade to unlock AI Assistant features',
+              feature: 'hazardAlerts',
+              customUpgradeMessage: 'Upgrade to unlock Hazard Alerts',
               child: Card(
-                color: AppTheme.successGreen.withValues(alpha: 0.1),
+                color: AppTheme.warningOrange.withValues(alpha: 0.1),
                 child: ListTile(
-                  leading: Icon(Icons.psychology, color: AppTheme.successGreen),
-                  title: Text('AI Assistant Enabled'),
-                  subtitle: Text('You have full access to AI features'),
+                  leading: Icon(Icons.warning, color: AppTheme.warningOrange),
+                  title: Text('Hazard Alerts Enabled'),
+                  subtitle: Text('You have access to hazard alerts'),
                 ),
               ),
             ),

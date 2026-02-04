@@ -5,6 +5,7 @@ import '../models/sar_access_level.dart';
 import '../widgets/upgrade_required_dialog.dart';
 import 'subscription_service.dart';
 import 'usage_tracking_service.dart';
+import '../config/env.dart';
 
 /// Service for controlling feature access based on subscription tiers
 class FeatureAccessService {
@@ -137,11 +138,6 @@ class FeatureAccessService {
     }
   }
 
-  /// Check if user can use AI Assistant
-  bool canUseAIAssistant() {
-    return hasFeatureAccess('aiAssistant');
-  }
-
   /// Check if user has unlimited SOS alerts
   bool hasUnlimitedSOS() {
     return hasFeatureAccess('unlimitedSOS');
@@ -164,6 +160,7 @@ class FeatureAccessService {
 
   /// Check if user can manage family members (family admin only)
   bool canManageFamilyMembers() {
+    if (!enforceSubscriptions) return true;
     if (!_isInitialized || _subscriptionService == null) {
       return false;
     }
@@ -174,6 +171,7 @@ class FeatureAccessService {
 
   /// Check if user can access family dashboard
   bool canAccessFamilyDashboard() {
+    if (!enforceSubscriptions) return true;
     if (!_isInitialized || _subscriptionService == null) {
       return false;
     }
@@ -184,122 +182,117 @@ class FeatureAccessService {
 
   /// Get available features for a subscription tier
   List<String> getAvailableFeatures(SubscriptionTier tier) {
+    // This is the canonical list used for upgrade prompts and feature gates.
+    // Keep it aligned with keys passed to hasFeatureAccess(...) across the app.
+    final tierRank = _tierRank(tier);
+    return _featureRequirements.entries
+        .where((e) {
+          final required = e.value;
+          if (_retiredInAppFeatures.contains(e.key)) return false;
+          return required == null || _tierRank(required) <= tierRank;
+        })
+        .map((e) => e.key)
+        .toList(growable: false);
+  }
+
+  static const Map<String, String> _featureAliases = {
+    // Legacy keys used in older UI/gating.
+    'medicalInfo': 'medicalProfile',
+    'sosSms': 'sosSMS',
+  };
+
+  static const Set<String> _retiredInAppFeatures = {
+    // Community chat is website-only.
+    'communityChat',
+    'basicCommunityChat',
+    'fullCommunityChat',
+    'communityFeatures',
+    // Emergency messaging UI/call injection removed in this build.
+    'emergencyMessaging',
+    // Family chat is not supported in-app.
+    'familyChat',
+  };
+
+  static const Map<String, SubscriptionTier?> _featureRequirements = {
+    // Free / baseline (null => free)
+    'unlimitedSOS': null,
+    'quickCall': null,
+    'mapAccess': null,
+
+    // Essential+
+    'medicalProfile': SubscriptionTier.essentialPlus,
+    'acfd': SubscriptionTier.essentialPlus,
+    'hazardAlerts': SubscriptionTier.essentialPlus,
+    'sosSMS': SubscriptionTier.essentialPlus,
+    'satelliteComm': SubscriptionTier.essentialPlus,
+    'sosTesting': SubscriptionTier.essentialPlus,
+
+    // Pro
+    'redpingMode': SubscriptionTier.pro,
+    'gadgetIntegration': SubscriptionTier.pro,
+    'sarParticipation': SubscriptionTier.pro,
+    'sarVolunteerRegistration': SubscriptionTier.pro,
+    'sarDashboardWrite': SubscriptionTier.pro,
+    'sarMissionCoordination': SubscriptionTier.pro,
+
+    // Ultra
+    'organizationManagement': SubscriptionTier.ultra,
+    'sarAdminAccess': SubscriptionTier.ultra,
+    'sarTeamManagement': SubscriptionTier.ultra,
+    'sarAnalytics': SubscriptionTier.ultra,
+    'multiTeamCoordination': SubscriptionTier.ultra,
+
+    // Retired/website-only (kept here so the UI can show accurate messaging)
+    'communityChat': null,
+    'basicCommunityChat': null,
+    'fullCommunityChat': null,
+    'communityFeatures': null,
+    'emergencyMessaging': null,
+    'familyChat': null,
+  };
+
+  static int _tierRank(SubscriptionTier? tier) {
+    if (tier == null) return 0;
     switch (tier) {
       case SubscriptionTier.free:
-        return [
-          'basicCrashDetection',
-          'basicFallDetection',
-          'gpsLocationSharing',
-          'limitedRedpingHelp', // NEW: Limited safety access
-        ];
+        return 0;
       case SubscriptionTier.essentialPlus:
-        return [
-          'aiVerification',
-          'basicCrashDetection',
-          'basicFallDetection',
-          'gpsLocationSharing',
-          'basicHazardAlerts',
-          'communityChat',
-          'basicActivityTracking',
-          'sarNetworkConnection', // Observer level SAR access
-          'viewSARActivities', // Can view but not participate
-          'emergencyNotifications',
-          'enhancedRedpingHelp', // Enhanced access
-          'basicAiAssistant',
-          'enhancedActivityTracking',
-          'limitedCommunityParticipation',
-          'prioritySarConnection', // Better SAR network access
-          'satelliteStatus',
-          'sarInformation', // Access to SAR educational content
-          'unlimitedRedpingHelp',
-        ];
-
+        return 1;
       case SubscriptionTier.pro:
-        return [
-          ...getAvailableFeatures(SubscriptionTier.essentialPlus),
-          'fullAiAssistant', // Moved from Ultra
-          'advancedAnalytics', // Moved from Ultra
-          'satelliteComm',
-          'sarParticipation', // Full SAR participation
-          'sarVolunteerRegistration', // Can register as volunteer
-          'missionParticipation', // Join SAR missions
-          'sarCommunication', // SAR communication channels
-          'sarTeamBasics', // Basic team coordination
-          'advancedAIVerification',
-          'missionCoordination',
-          'hazardReporting',
-          'helpAssistant',
-          'advancedActivityTracking',
-          'fullCommunityChat',
-          'gadgetIntegration', // Basic gadget integration
-          'deviceManagement', // Manage connected devices
-        ];
-
+        return 2;
       case SubscriptionTier.ultra:
-        return [
-          ...getAvailableFeatures(SubscriptionTier.pro),
-          'organizationManagement', // Full SAR organization management
-          'sarTeamManagement', // Create and manage SAR teams
-          'sarMissionCoordination', // Coordinate SAR missions
-          'multiTeamCoordination', // Coordinate multiple teams
-          'sarAnalytics', // Advanced SAR analytics
-          'sarTraining', // Access to SAR training materials
-          'teamManagement',
-          'enterpriseAiAssistant',
-          'enterpriseAnalytics',
-          'customActivityTemplates',
-          'organizationReporting',
-          'emergencyBroadcast',
-          'integrationApis',
-          'prioritySupport',
-          'gadgetIntegration', // Basic gadget integration
-          'deviceManagement', // Manage connected devices
-          'crossDeviceSync', // Sync across devices
-        ];
-
+        return 3;
       case SubscriptionTier.family:
-        return [
-          ...getAvailableFeatures(SubscriptionTier.pro),
-          'familyDashboard',
-          'familyCoordination',
-          'sharedEmergencyContacts',
-          'familyLocationSharing',
-          'crossAccountNotifications',
-          'familyChat',
-          'familyActivityOverview',
-          'familySARCoordination', // Family members can coordinate SAR
-          'gadgetIntegration', // Basic gadget integration
-          'deviceManagement', // Manage connected devices
-          'familyDeviceSharing', // Share devices with family members
-        ];
+        // Treat family as comparable to Pro for most feature gating.
+        return 2;
     }
+  }
+
+  String _normalizeFeatureKey(String feature) {
+    return _featureAliases[feature] ?? feature;
   }
 
   /// Get features available without subscription (free tier)
   List<String> _getFreeFeatures() {
-    return [
-      'basicSOS', // Limited SOS alerts
-      'basicLocationSharing',
-      'emergencyContacts', // Limited count
-      'basicCrashDetection',
-      'basicFallDetection',
-      'limitedRedpingHelp', // NEW: Limited REDP!NG Help access
-      'basicCommunityChat', // Read-only community access
-    ];
+    return _featureRequirements.entries
+        .where((e) => e.value == null)
+        .map((e) => e.key)
+        .where((k) => !_retiredInAppFeatures.contains(k))
+        .toList(growable: false);
   }
 
   /// Get feature limits for free tier
   Map<String, int> _getFreeFeatureLimits() {
     return {
-      'sosAlertsPerMonth': 5, // Increased for safety
+      // Align with the in-app free plan definition.
+      'sosAlertsPerMonth': -1, // Unlimited (manual)
       'emergencyContacts': 2,
       'satelliteMessages': 0,
       'sarParticipation': 0,
       'organizationManagement': 0,
-      'aiAssistant': 0,
-      'redpingHelp': 5, // 5 requests per month on free plan
+      'redpingHelp': -1,
       'sosTesting': 0, // No SOS testing for free users
-      'medicalInfo': 0, // No medical info management for free users
+      'medicalInfo': 0, // Legacy alias (maps to medicalProfile)
       'hazardAlerts': 0, // No hazard alerts for free users
       'emergencyMessaging': 0, // No emergency messaging for free users
       'communityFeatures': 0, // No community features for free users
@@ -308,7 +301,6 @@ class FeatureAccessService {
       'sarMissionCoordination': 0, // No SAR mission coordination for free users
       'sarAnalytics': 0, // No SAR analytics for free users
       'organizationReporting': 0, // No organization reporting for free users
-      'enterpriseAiAssistant': 0, // No enterprise AI for free users
       'enterpriseAnalytics': 0, // No enterprise analytics for free users
       'familyDashboard': 0, // No family dashboard for free users
       'familyCoordination': 0, // No family coordination for free users
@@ -319,17 +311,18 @@ class FeatureAccessService {
 
   /// Get subscription tier requirements for a feature
   SubscriptionTier? getRequiredTierForFeature(String feature) {
+    feature = _normalizeFeatureKey(feature);
+
+    // Retired/website-only features should not suggest an upgrade.
+    if (_retiredInAppFeatures.contains(feature)) {
+      return null;
+    }
+
     if (_getFreeFeatures().contains(feature)) {
       return null; // Free feature
     }
 
-    for (final tier in SubscriptionTier.values) {
-      if (getAvailableFeatures(tier).contains(feature)) {
-        return tier;
-      }
-    }
-
-    return SubscriptionTier.ultra; // Default to highest tier if not found
+    return _featureRequirements[feature] ?? SubscriptionTier.ultra;
   }
 
   /// Check if user needs to upgrade for a feature
@@ -339,6 +332,21 @@ class FeatureAccessService {
 
   /// Get upgrade message for a feature
   String getUpgradeMessage(String feature) {
+    feature = _normalizeFeatureKey(feature);
+
+    if (_retiredInAppFeatures.contains(feature)) {
+      if (feature == 'communityChat' || feature == 'communityFeatures') {
+        return 'Community chat is now available on the RedPing website (not in-app).';
+      }
+      if (feature == 'familyChat') {
+        return 'Family chat is not available in this app build.';
+      }
+      if (feature == 'emergencyMessaging') {
+        return 'Emergency messaging UI has been removed from this app build.';
+      }
+      return 'This feature is not available in this app build.';
+    }
+
     final requiredTier = getRequiredTierForFeature(feature);
     if (requiredTier == null) {
       return 'This feature is available to all users';
@@ -392,11 +400,6 @@ class FeatureAccessService {
       case 'redpingHelp':
       case 'unlimitedRedpingHelp':
         shouldUpgrade = await UpgradeRequiredDialog.showForRedpingHelp(context);
-        break;
-      case 'aiAssistant':
-      case 'basicAiAssistant':
-      case 'fullAiAssistant':
-        shouldUpgrade = await UpgradeRequiredDialog.showForAIAssistant(context);
         break;
       case 'sarParticipation':
         shouldUpgrade = await UpgradeRequiredDialog.showForSARParticipation(

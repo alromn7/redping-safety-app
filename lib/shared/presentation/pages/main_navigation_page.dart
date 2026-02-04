@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/routing/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../widgets/app_status_widget.dart';
 import '../../../services/feature_access_service.dart';
+import '../../../core/app/app_launch_config.dart';
+import '../../../core/app_variant.dart';
+import '../../../config/env.dart';
 // import '../../../services/auth_service.dart';
 // import '../../../models/auth_user.dart';
 
@@ -20,73 +24,57 @@ class MainNavigationPage extends StatefulWidget {
 class _MainNavigationPageState extends State<MainNavigationPage> {
   int _selectedIndex = 0;
 
-  final List<NavigationDestination> _destinations = [
-    const NavigationDestination(
-      icon: Icon(Icons.sos_outlined),
-      selectedIcon: Icon(Icons.sos, color: AppTheme.primaryRed),
-      label: 'SOS',
-    ),
-    const NavigationDestination(
-      icon: Icon(Icons.map_outlined),
-      selectedIcon: Icon(Icons.map, color: AppTheme.primaryRed),
-      label: 'Map',
-    ),
-    const NavigationDestination(
-      icon: Icon(Icons.manage_search_rounded),
-      selectedIcon: Icon(Icons.manage_search, color: AppTheme.warningOrange),
-      label: 'SAR',
-    ),
-    const NavigationDestination(
-      icon: Icon(Icons.people_outline),
-      selectedIcon: Icon(Icons.people, color: AppTheme.primaryRed),
-      label: 'Community',
-    ),
-    const NavigationDestination(
-      icon: Icon(Icons.person_outline),
-      selectedIcon: Icon(Icons.person, color: AppTheme.primaryRed),
-      label: 'Profile',
-    ),
-  ];
+  bool get _showSarNav => AppLaunchConfig.variant == AppVariant.sar;
+  bool get _showBottomNav => AppLaunchConfig.variant != AppVariant.emergency;
 
-  final List<String> _routes = [
-    AppRouter.main,
-    AppRouter.map,
-    AppRouter.sar,
-    AppRouter.community,
-    AppRouter.profile,
-  ];
+  List<NavigationDestination> get _destinations {
+    final items = <NavigationDestination>[
+      const NavigationDestination(
+        icon: Icon(Icons.sos_outlined),
+        selectedIcon: Icon(Icons.sos, color: AppTheme.primaryRed),
+        label: 'SOS',
+      ),
+      if (_showSarNav)
+        const NavigationDestination(
+          icon: Icon(Icons.manage_search_rounded),
+          selectedIcon: Icon(Icons.manage_search, color: AppTheme.warningOrange),
+          label: 'SAR',
+        ),
+      const NavigationDestination(
+        icon: Icon(Icons.person_outline),
+        selectedIcon: Icon(Icons.person, color: AppTheme.primaryRed),
+        label: 'Profile',
+      ),
+    ];
+    return items;
+  }
+
+  List<String> get _routes {
+    final routes = <String>[AppRouter.main];
+    if (_showSarNav) routes.add(AppRouter.sar);
+    routes.add(AppRouter.profile);
+    return routes;
+  }
 
   void _onDestinationSelected(int index) {
     if (index != _selectedIndex) {
-      // Check Community access for Community tab (index 3 now)
-      if (index == 3) {
-        _handleCommunityTabClick();
-        return;
-      }
-
       setState(() {
         _selectedIndex = index;
       });
-      context.go(_routes[index]);
+      final routes = _routes;
+      if (index >= 0 && index < routes.length) {
+        context.go(routes[index]);
+      }
     }
-  }
-
-  /// Handle Community tab click with access control
-  void _handleCommunityTabClick() {
-    // Essential users can access Community but with limited features
-    // Pro+ users get full access (handled within the Community page)
-    setState(() {
-      _selectedIndex = 3;
-    });
-    context.go(_routes[3]);
   }
 
   @override
   Widget build(BuildContext context) {
     // Update selected index based on current route
     final location = GoRouterState.of(context).uri.path;
-    for (int i = 0; i < _routes.length; i++) {
-      if (location.startsWith(_routes[i])) {
+    final routes = _routes;
+    for (int i = 0; i < routes.length; i++) {
+      if (location.startsWith(routes[i])) {
         if (_selectedIndex != i) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
@@ -125,22 +113,28 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
       },
       child: Scaffold(
         body: widget.child,
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: _onDestinationSelected,
-          destinations: _destinations,
-          backgroundColor: AppTheme.darkSurface,
-          indicatorColor: AppTheme.primaryRed.withValues(alpha: 0.2),
-          elevation: 8,
-          height: 80,
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        ),
+        bottomNavigationBar: _showBottomNav
+            ? NavigationBar(
+                selectedIndex: _selectedIndex,
+                onDestinationSelected: _onDestinationSelected,
+                destinations: _destinations,
+                backgroundColor: AppTheme.darkSurface,
+                indicatorColor: AppTheme.primaryRed.withValues(alpha: 0.2),
+                elevation: 8,
+                height: 80,
+                labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              )
+            : null,
         drawer: _buildDrawer(context),
       ),
     );
   }
 
   Widget _buildDrawer(BuildContext context) {
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+    final isAnonymous = firebaseUser?.isAnonymous ?? true;
+    final shouldShowSignIn = firebaseUser == null || isAnonymous;
+
     return Drawer(
       backgroundColor: AppTheme.darkSurface,
       child: ListView(
@@ -157,18 +151,26 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
                 Flexible(
                   flex: 0,
                   child: Image.asset(
-                    'assets/images/RedPing logo.png',
+                    'assets/images/REDP!NG.webp',
                     height: 38,
                     width: 38,
                     fit: BoxFit.contain,
                     errorBuilder: (context, error, stackTrace) {
-                      return const Text(
-                        'REDP!NG',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      return Image.asset(
+                        'assets/images/REDP!NG.png',
+                        height: 38,
+                        width: 38,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error2, stackTrace2) {
+                          return const Text(
+                            'REDP!NG',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          );
+                        },
                       );
                     },
                   ),
@@ -195,44 +197,127 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
             child: AppStatusWidget(),
           ),
 
+          // Ensure users can always reach auth screens (especially when anonymous/bypass flows are active).
+          if (shouldShowSignIn) ...[
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.infoBlue.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.login,
+                  color: AppTheme.infoBlue,
+                  size: 22,
+                ),
+              ),
+              title: const Text(
+                'Sign In',
+                style: TextStyle(
+                  color: AppTheme.primaryText,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              subtitle: Text(
+                firebaseUser == null
+                    ? 'Log in to access account features'
+                    : 'You are using a guest session',
+                style: const TextStyle(
+                  color: AppTheme.secondaryText,
+                  fontSize: 12,
+                ),
+              ),
+              trailing: const Icon(
+                Icons.arrow_forward_ios,
+                size: 14,
+                color: AppTheme.secondaryText,
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                context.go(AppRouter.login);
+              },
+            ),
+          ],
+
           const Divider(height: 1, color: AppTheme.neutralGray),
 
+          // Safety Fund is not part of the SOS variant UI.
+          if (AppLaunchConfig.variant != AppVariant.emergency)
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.safeGreen.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.volunteer_activism,
+                  color: AppTheme.safeGreen,
+                  size: 22,
+                ),
+              ),
+              title: const Text(
+                'Safety Fund',
+                style: TextStyle(
+                  color: AppTheme.primaryText,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              subtitle: const Text(
+                'Community rescue cost protection',
+                style: TextStyle(color: AppTheme.secondaryText, fontSize: 12),
+              ),
+              trailing: const Icon(
+                Icons.arrow_forward_ios,
+                size: 14,
+                color: AppTheme.secondaryText,
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/safety-fund/dashboard');
+              },
+            ),
+
           // SAR Mode
-          ListTile(
-            leading: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppTheme.warningOrange.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
+          if (_showSarNav)
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.warningOrange.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.manage_search_rounded,
+                  color: AppTheme.warningOrange,
+                  size: 22,
+                ),
               ),
-              child: const Icon(
-                Icons.manage_search_rounded,
-                color: AppTheme.warningOrange,
-                size: 22,
+              title: const Text(
+                'SAR Mode',
+                style: TextStyle(
+                  color: AppTheme.primaryText,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
               ),
-            ),
-            title: const Text(
-              'SAR Mode',
-              style: TextStyle(
-                color: AppTheme.primaryText,
-                fontWeight: FontWeight.w600,
-                fontSize: 15,
+              subtitle: const Text(
+                'Search & Rescue Operations',
+                style: TextStyle(color: AppTheme.secondaryText, fontSize: 12),
               ),
+              trailing: const Icon(
+                Icons.arrow_forward_ios,
+                size: 14,
+                color: AppTheme.secondaryText,
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                context.go(AppRouter.sar);
+              },
             ),
-            subtitle: const Text(
-              'Search & Rescue Operations',
-              style: TextStyle(color: AppTheme.secondaryText, fontSize: 12),
-            ),
-            trailing: const Icon(
-              Icons.arrow_forward_ios,
-              size: 14,
-              color: AppTheme.secondaryText,
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              context.go(AppRouter.sar);
-            },
-          ),
 
           // Settings
           ListTile(
@@ -327,20 +412,9 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
               size: 14,
               color: AppTheme.secondaryText,
             ),
-            onTap: () async {
+            onTap: () {
               Navigator.pop(context);
-              // Gate access similar to SOS quick-access
-              FeatureAccessService.instance.initialize();
-              final allowed = await FeatureAccessService.instance
-                  .checkFeatureAccessWithUpgrade(
-                    context,
-                    'hazardAlerts',
-                    customMessage:
-                        'Advanced hazard alerts and weather monitoring require Pro tier or higher. Upgrade to access comprehensive safety alerts and environmental monitoring.',
-                  );
-              if (allowed && context.mounted) {
-                context.go(AppRouter.hazardAlerts);
-              }
+              context.go(AppRouter.hazardAlerts);
             },
           ),
 
@@ -483,19 +557,15 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
               const SizedBox(height: 8),
               _buildHelpItem(
                 '🚨 SOS Button',
-                'Press and hold for 3 seconds to trigger emergency',
+                'Press and hold for 5 seconds to trigger emergency',
               ),
               _buildHelpItem(
                 '🚗 Crash Detection',
-                'Automatic detection with AI verification',
+                'Automatic detection with safety checks and SOS countdown',
               ),
               _buildHelpItem(
                 '🤸 Fall Detection',
-                'Monitors falls with voice confirmation',
-              ),
-              _buildHelpItem(
-                '🎤 AI Verification',
-                'Speak "Yes" or "Help" to confirm emergency',
+                'Monitors falls and starts an SOS countdown you can cancel',
               ),
               const SizedBox(height: 16),
 
@@ -594,6 +664,11 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
                     SizedBox(height: 8),
                     Text(
                       'For life-threatening emergencies, always call local emergency services first:',
+                      style: TextStyle(fontSize: 12, height: 1.4),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'RedPing SOS notifies your emergency contacts with your location. RedPing does not contact emergency services automatically.',
                       style: TextStyle(fontSize: 12, height: 1.4),
                     ),
                     SizedBox(height: 4),
@@ -721,7 +796,7 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
               const Text(
                 'Your comprehensive safety companion providing real-time emergency detection, '
                 'instant SOS alerts, and seamless SAR integration. Built with cutting-edge '
-                'AI technology to keep you and your loved ones safe.',
+                'sensor-based safety monitoring to help keep you and your loved ones safe.',
                 style: TextStyle(fontSize: 14, height: 1.5),
               ),
               const SizedBox(height: 20),
@@ -730,7 +805,7 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
               _buildSectionHeader(context, Icons.stars, 'Core Features'),
               const SizedBox(height: 8),
               _buildFeatureItem('🚨 Emergency Response System'),
-              _buildFeatureItem('🛡️ AI-Powered Safety Monitoring'),
+              _buildFeatureItem('🛡️ Sensor-based Safety Monitoring'),
               _buildFeatureItem('🚁 SAR Integration & Coordination'),
               _buildFeatureItem('👥 Community Safety Network'),
               _buildFeatureItem('💬 Real-time Communication'),
@@ -742,7 +817,7 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
               const SizedBox(height: 8),
               _buildFeatureItem('Flutter & Dart Framework'),
               _buildFeatureItem('Firebase Cloud Services'),
-              _buildFeatureItem('Google AI (Gemini Pro)'),
+              _buildFeatureItem('Secure Cloud Configuration'),
               _buildFeatureItem('Advanced Sensor Integration'),
               const SizedBox(height: 16),
 

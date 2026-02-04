@@ -5,7 +5,6 @@ import 'package:geolocator/geolocator.dart';
 import '../core/theme/app_theme.dart';
 import '../services/app_service_manager.dart';
 import '../services/location_service.dart';
-import '../services/emergency_detection_service.dart';
 import '../services/location_sharing_service.dart';
 import '../models/sos_session.dart';
 
@@ -36,7 +35,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
   // Location and emergency status
   Position? _currentLocation;
   bool _isLocationAvailable = false;
-  bool _isEmergencyDetectionActive = false;
+  final bool _isEmergencyDetectionActive = false;
 
   @override
   void initState() {
@@ -90,15 +89,8 @@ class _EmergencyScreenState extends State<EmergencyScreen>
         _currentLocation = await LocationService.getCurrentLocationStatic();
       }
 
-      // Start emergency detection only in debug builds to avoid false positives in release
-      // The default EmergencyDetectionService uses simplified low thresholds intended for testing
-      // and can be overly sensitive in production. SensorService handles production-grade detection.
-      // ignore: prefer_asserts_with_message
-      assert(() {
-        EmergencyDetectionService.startMonitoring();
-        _isEmergencyDetectionActive = true;
-        return true;
-      }());
+      // Note: Emergency detection (ACFD) is handled by SensorService via AppServiceManager.
+      // SensorService provides production-grade crash/fall detection with adaptive sampling.
 
       setState(() {});
     } catch (e) {
@@ -242,7 +234,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
               ),
               const SizedBox(height: 8),
               const Text(
-                '📱 Your location will be shared with emergency services',
+                '📱 Your location will be shared with your emergency contacts',
                 style: TextStyle(color: AppTheme.primaryText),
               ),
               const Text(
@@ -254,7 +246,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
                 style: TextStyle(color: AppTheme.primaryText),
               ),
               const Text(
-                '📡 SAR teams will be alerted',
+                '📞 Emergency hotline is available (manual dial)',
                 style: TextStyle(color: AppTheme.primaryText),
               ),
             ],
@@ -280,7 +272,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          '✅ EMERGENCY SOS ACTIVATED - Location shared with emergency services!',
+          '✅ EMERGENCY SOS ACTIVATED - Location shared with your emergency contacts!',
         ),
         backgroundColor: Colors.green,
         behavior: SnackBarBehavior.floating,
@@ -359,7 +351,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
               // SAR Chat button
               ElevatedButton.icon(
                 icon: Icon(Icons.chat),
-                label: Text('Open SAR Chat'),
+                label: Text('Messaging (not in-app)'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.accentGreen,
                   foregroundColor: AppTheme.primaryText,
@@ -369,7 +361,14 @@ class _EmergencyScreenState extends State<EmergencyScreen>
                   ),
                 ),
                 onPressed: () {
-                  Navigator.of(context).pushNamed('/sar-chat');
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Messaging is not available in-app in this build.',
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
                 },
               ),
 

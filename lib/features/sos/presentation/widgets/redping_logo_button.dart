@@ -24,7 +24,7 @@ class RedPingLogoButton extends StatefulWidget {
     this.size = 120.0, // Smaller than SOS button (200.0)
     this.helpRequestStatus, // null = no active request
     this.onHoldToActivate,
-    this.holdSeconds = 10,
+    this.holdSeconds = 5,
     this.isSosActivated = false,
   });
 
@@ -340,21 +340,27 @@ class _RedPingLogoButtonState extends State<RedPingLogoButton>
                           ),
                           child: Center(
                             child: Container(
-                              width: widget.size * 0.6,
-                              height: widget.size * 0.6,
+                              width: widget.size * 0.63,
+                              height: widget.size * 0.63,
                               decoration: BoxDecoration(
                                 color: Colors.black,
                                 shape: BoxShape.circle,
                               ),
                               child: ClipOval(
                                 child: Image.asset(
-                                  'assets/images/RedPing logo.png',
-                                  fit: BoxFit.contain,
+                                  'assets/images/Redpinglogo5.webp',
+                                  fit: BoxFit.cover,
                                   errorBuilder: (context, error, stackTrace) =>
-                                      const Icon(
-                                        Icons.help_outline,
-                                        color: Colors.white,
-                                        size: 32,
+                                      Image.asset(
+                                        'assets/images/Redpinglogo5.png',
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error2, stackTrace2) =>
+                                                const Icon(
+                                                  Icons.help_outline,
+                                                  color: Colors.white,
+                                                  size: 32,
+                                                ),
                                       ),
                                 ),
                               ),

@@ -1,7 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../core/theme/app_theme.dart';
+import '../core/network/starlink_carrier_utils.dart';
 import '../services/app_service_manager.dart';
+import '../services/connectivity_monitor_service.dart';
+import '../models/user_profile.dart';
+import '../services/platform_service.dart';
 
 /// Widget showing overall app status and emergency readiness
 class AppStatusWidget extends StatefulWidget {
@@ -13,29 +18,70 @@ class AppStatusWidget extends StatefulWidget {
 
 class _AppStatusWidgetState extends State<AppStatusWidget> {
   final AppServiceManager _serviceManager = AppServiceManager();
+  final ConnectivityMonitorService _connectivityMonitor =
+      ConnectivityMonitorService();
   double _readinessScore = 0.0;
-  Map<String, dynamic> _appStatus = {};
+  Timer? _timer;
+
+  bool _hasMobileConnectivity = false;
+  bool _hasWifiConnectivity = false;
+
+  String _carrierName = 'Unknown';
+  bool _carrierStarlinkCapable = false;
 
   @override
   void initState() {
     super.initState();
+    _connectivityMonitor.initialize();
     _updateStatus();
 
     // Update status every 30 seconds
-    Timer.periodic(const Duration(seconds: 30), (timer) {
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) {
         _updateStatus();
-      } else {
-        timer.cancel();
       }
     });
   }
 
-  void _updateStatus() {
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _updateStatus() async {
+    if (!mounted) return;
+
+    // Connectivity type (mobile/wifi)
+    bool hasMobile = false;
+    bool hasWifi = false;
+    try {
+      final results = await Connectivity().checkConnectivity();
+      hasMobile = results.contains(ConnectivityResult.mobile);
+      hasWifi =
+          results.contains(ConnectivityResult.wifi) ||
+          results.contains(ConnectivityResult.ethernet) ||
+          results.contains(ConnectivityResult.vpn);
+    } catch (_) {
+      // Non-fatal; we'll just keep previous values
+    }
+
+    String carrierName = _carrierName;
+    bool carrierStarlink = _carrierStarlinkCapable;
+    try {
+      carrierName = await PlatformService.getCarrierName();
+      carrierStarlink = StarlinkCarrierUtils.isStarlinkPartnerCarrier(carrierName);
+    } catch (_) {
+      // Non-fatal
+    }
+
     if (!mounted) return;
     setState(() {
       _readinessScore = _serviceManager.getEmergencyReadinessScore();
-      _appStatus = _serviceManager.getAppStatus();
+      _hasMobileConnectivity = hasMobile;
+      _hasWifiConnectivity = hasWifi;
+      _carrierName = carrierName;
+      _carrierStarlinkCapable = carrierStarlink;
     });
   }
 
@@ -120,6 +166,47 @@ class _AppStatusWidgetState extends State<AppStatusWidget> {
                 ),
               ],
             ),
+
+            const SizedBox(height: 12),
+
+            // Additional readiness indicators
+            Row(
+              children: [
+                Expanded(
+                  child: _buildServiceIndicator(
+                    'Medical',
+                    _getMedicalStatus(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildServiceIndicator(
+                    'Mobile',
+                    _getMobileNetworkStatus(),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 10),
+
+            Row(
+              children: [
+                Expanded(
+                  child: _buildServiceIndicator(
+                    'Starlink',
+                    _getStarlinkCarrierStatus(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildServiceIndicator(
+                    'Satellite',
+                    _getSatelliteEnabledStatus(),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -127,6 +214,9 @@ class _AppStatusWidgetState extends State<AppStatusWidget> {
   }
 
   Widget _buildServiceIndicator(String label, ServiceStatus status) {
+    final showCarrier = label == 'Starlink';
+    final carrierText = _carrierName.trim().isEmpty ? 'Unknown' : _carrierName;
+
     return Column(
       children: [
         Container(
@@ -147,6 +237,21 @@ class _AppStatusWidgetState extends State<AppStatusWidget> {
           ),
           textAlign: TextAlign.center,
         ),
+
+        if (showCarrier) ...[
+          const SizedBox(height: 2),
+          Text(
+            carrierText,
+            style: const TextStyle(
+              color: AppTheme.secondaryText,
+              fontSize: 9,
+              fontWeight: FontWeight.w400,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ],
     );
   }
@@ -164,43 +269,83 @@ class _AppStatusWidgetState extends State<AppStatusWidget> {
   }
 
   ServiceStatus _getSOSStatus() {
-    final services = _appStatus['services'] as Map<String, dynamic>? ?? {};
-    final sosStatus = services['sos'] as Map<String, dynamic>? ?? {};
-    final isInitialized = sosStatus['isInitialized'] ?? false;
-    final hasActiveSession = sosStatus['hasActiveSession'] ?? false;
-
+    final hasActiveSession = _serviceManager.sosService.hasActiveSession;
     if (hasActiveSession) return ServiceStatus.active;
-    if (isInitialized) return ServiceStatus.ready;
-    return ServiceStatus.error;
+    return _serviceManager.sosService.isInitialized
+        ? ServiceStatus.ready
+        : ServiceStatus.error;
   }
 
   ServiceStatus _getSensorStatus() {
-    final services = _appStatus['services'] as Map<String, dynamic>? ?? {};
-    final sensorStatus = services['sensor'] as Map<String, dynamic>? ?? {};
-    final isMonitoring = sensorStatus['isMonitoring'] ?? false;
-
-    if (isMonitoring) return ServiceStatus.active;
+    final sensor = _serviceManager.sensorService;
+    if (sensor.isMonitoring) return ServiceStatus.active;
+    // Consider sensors "ready" when at least one detection mode is enabled.
+    if (sensor.crashDetectionEnabled || sensor.fallDetectionEnabled) {
+      return ServiceStatus.ready;
+    }
     return ServiceStatus.error;
   }
 
   ServiceStatus _getLocationStatus() {
-    final services = _appStatus['services'] as Map<String, dynamic>? ?? {};
-    final locationStatus = services['location'] as Map<String, dynamic>? ?? {};
-    final hasPermission = locationStatus['hasPermission'] ?? false;
-    final isTracking = locationStatus['isTracking'] ?? false;
-
-    if (isTracking) return ServiceStatus.active;
-    if (hasPermission) return ServiceStatus.ready;
-    return ServiceStatus.error;
+    final location = _serviceManager.locationService;
+    if (location.isTracking) return ServiceStatus.active;
+    return location.hasPermission ? ServiceStatus.ready : ServiceStatus.error;
   }
 
   ServiceStatus _getContactsStatus() {
-    final services = _appStatus['services'] as Map<String, dynamic>? ?? {};
-    final contactsStatus = services['contacts'] as Map<String, dynamic>? ?? {};
-    final enabledContacts = contactsStatus['enabledContacts'] ?? 0;
+    final enabledCount = _serviceManager.contactsService.enabledContacts.length;
+    if (enabledCount >= 2) return ServiceStatus.active;
+    if (enabledCount >= 1) return ServiceStatus.ready;
+    return ServiceStatus.error;
+  }
 
-    if (enabledContacts >= 2) return ServiceStatus.active;
-    if (enabledContacts >= 1) return ServiceStatus.ready;
+  ServiceStatus _getMedicalStatus() {
+    final profile = _serviceManager.profileService.currentProfile;
+    if (profile == null) return ServiceStatus.error;
+
+    return _hasAnyMedicalInfo(profile) ? ServiceStatus.ready : ServiceStatus.error;
+  }
+
+  bool _hasAnyMedicalInfo(UserProfile profile) {
+    final hasBlood = (profile.bloodType ?? '').trim().isNotEmpty;
+    final hasAllergies = profile.allergies.isNotEmpty;
+    final hasMeds = profile.medications.isNotEmpty;
+    final hasConditions = profile.medicalConditions.isNotEmpty;
+    final hasDob = profile.dateOfBirth != null;
+    return hasBlood || hasAllergies || hasMeds || hasConditions || hasDob;
+  }
+
+  ServiceStatus _getMobileNetworkStatus() {
+    // Green when we have a mobile data bearer AND internet is reachable.
+    final internetOk = _connectivityMonitor.hasInternetAccess;
+    if (_hasMobileConnectivity && internetOk) return ServiceStatus.active;
+    // If internet is reachable but via Wi‑Fi/other, show "ready".
+    if ((_hasWifiConnectivity || !_connectivityMonitor.isEffectivelyOffline) &&
+        internetOk) {
+      return ServiceStatus.ready;
+    }
+    return ServiceStatus.error;
+  }
+
+  /// Starlink readiness based on carrier partnership (e.g., Telstra/Globe).
+  /// This is about wide SMS reach in remote areas, not device satellite APIs.
+  ServiceStatus _getStarlinkCarrierStatus() {
+    if (_carrierStarlinkCapable) {
+      // "Active" when we actually have a mobile bearer right now.
+      if (_hasMobileConnectivity) return ServiceStatus.active;
+      // Otherwise still "ready" (capable when mobile is present).
+      return ServiceStatus.ready;
+    }
+    return ServiceStatus.error;
+  }
+
+  /// Satellite device feature readiness (separate from carrier Starlink).
+  ServiceStatus _getSatelliteEnabledStatus() {
+    final sat = _serviceManager.satelliteService;
+    if (sat.canSendEmergency || sat.isConnected) return ServiceStatus.active;
+    if (sat.isEnabled && sat.hasPermission && sat.isAvailable) {
+      return ServiceStatus.ready;
+    }
     return ServiceStatus.error;
   }
 
@@ -209,7 +354,8 @@ class _AppStatusWidgetState extends State<AppStatusWidget> {
       case ServiceStatus.active:
         return AppTheme.safeGreen;
       case ServiceStatus.ready:
-        return AppTheme.infoBlue;
+        // "Ready" is still good-to-go; show green in SOS readiness.
+        return AppTheme.safeGreen;
       case ServiceStatus.error:
         return AppTheme.criticalRed;
     }

@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart';
 import '../core/logging/app_logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:flutter_timezone/flutter_timezone.dart' as ftz;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants/app_constants.dart';
@@ -25,6 +28,11 @@ class NotificationService {
   bool _isFirebaseAvailable = false;
   bool _isEnabled = true; // User can disable notifications
   String? _fcmToken;
+  bool _tzInitialized = false;
+
+  // Debug dry-run mode for unit tests: avoids platform calls
+  static bool debugDryRun = false;
+  final List<_DebugScheduled> _debugScheduled = [];
 
   // Callbacks
   Function(String)? _onNotificationTapped;
@@ -41,6 +49,9 @@ class NotificationService {
       // Initialize local notifications
       await _initializeLocalNotifications();
 
+      // Initialize timezone database for scheduled notifications
+      await _ensureTimeZonesInitialized();
+
       // Initialize Firebase messaging (optional)
       await _initializeFirebaseMessaging();
 
@@ -49,6 +60,36 @@ class NotificationService {
     } catch (e) {
       AppLogger.e('Initialization error', tag: 'NotificationService', error: e);
       throw Exception('Failed to initialize notification service: $e');
+    }
+  }
+
+  /// Ensure timezone package is initialized for zoned scheduling
+  Future<void> _ensureTimeZonesInitialized() async {
+    if (_tzInitialized) return;
+    try {
+      // Load time zone database
+      tzdata.initializeTimeZones();
+      // Detect device local timezone
+      final dynamic tzInfo = await ftz.FlutterTimezone.getLocalTimezone();
+      String localName;
+      try {
+        localName = tzInfo.name as String;
+      } catch (_) {
+        try {
+          localName = tzInfo.timezone as String;
+        } catch (_) {
+          localName = tzInfo.toString();
+        }
+      }
+      tz.setLocalLocation(tz.getLocation(localName));
+      _tzInitialized = true;
+      debugPrint('NotificationService: Timezones initialized ($localName)');
+    } catch (e) {
+      // Fallback to UTC if detection fails
+      tzdata.initializeTimeZones();
+      tz.setLocalLocation(tz.getLocation('UTC'));
+      _tzInitialized = true;
+      debugPrint('NotificationService: Timezone init failed, using UTC - $e');
     }
   }
 
@@ -201,6 +242,23 @@ class NotificationService {
       debugPrint('NotificationService: Notifications disabled by user');
       return;
     }
+    if (debugDryRun) {
+      // Record as an immediate (non-scheduled) notification
+      _debugScheduled.add(
+        _DebugScheduled(
+          id:
+              notificationId ??
+              DateTime.now().millisecondsSinceEpoch.remainder(100000),
+          title: title,
+          body: body,
+          payload: payload,
+          hour: null,
+          minute: null,
+        ),
+      );
+      return;
+    }
+
     final androidDetails = AndroidNotificationDetails(
       'redping_alerts',
       'REDP!NG Safety Alerts',
@@ -240,6 +298,181 @@ class NotificationService {
 
     debugPrint('NotificationService: Local notification shown - $title');
   }
+
+  /// Schedule a daily notification at a specific local time (hour:minute)
+  Future<void> scheduleDailyNotification({
+    required int id,
+    required int hour,
+    required int minute,
+    required String title,
+    required String body,
+    String? payload,
+    NotificationImportance importance =
+        NotificationImportance.defaultImportance,
+  }) async {
+    if (!_isEnabled) return;
+    if (debugDryRun) {
+      _debugScheduled.add(
+        _DebugScheduled(
+          id: id,
+          title: title,
+          body: body,
+          payload: payload,
+          hour: hour,
+          minute: minute,
+        ),
+      );
+      return;
+    }
+    await _ensureTimeZonesInitialized();
+
+    final androidDetails = AndroidNotificationDetails(
+      'redping_daily_reminders',
+      'Daily Reminders',
+      channelDescription: 'Scheduled daily notifications',
+      importance: _mapImportance(importance),
+      priority: Priority.high,
+      showWhen: true,
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      sound: 'default',
+    );
+    final details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    tz.TZDateTime nextInstance(int h, int m) {
+      final now = tz.TZDateTime.now(tz.local);
+      var scheduled = tz.TZDateTime(
+        tz.local,
+        now.year,
+        now.month,
+        now.day,
+        h,
+        m,
+      );
+      if (scheduled.isBefore(now)) {
+        scheduled = scheduled.add(const Duration(days: 1));
+      }
+      return scheduled;
+    }
+
+    await _localNotifications.zonedSchedule(
+      id,
+      title,
+      body,
+      nextInstance(hour, minute),
+      details,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      androidScheduleMode: AndroidScheduleMode.inexact,
+      matchDateTimeComponents: DateTimeComponents.time,
+      payload: payload,
+    );
+  }
+
+  /// Schedule a one-off calendar notification at a specific local DateTime
+  Future<void> scheduleCalendarNotification({
+    required int id,
+    required DateTime dateTime,
+    required String title,
+    required String body,
+    String? payload,
+    NotificationImportance importance =
+        NotificationImportance.defaultImportance,
+  }) async {
+    if (!_isEnabled) return;
+    if (debugDryRun) {
+      _debugScheduled.add(
+        _DebugScheduled(
+          id: id,
+          title: title,
+          body: body,
+          payload: payload,
+          hour: null,
+          minute: null,
+        ),
+      );
+      return;
+    }
+    await _ensureTimeZonesInitialized();
+
+    final androidDetails = AndroidNotificationDetails(
+      'redping_calendar_reminders',
+      'Calendar Reminders',
+      channelDescription: 'One-off scheduled notifications',
+      importance: _mapImportance(importance),
+      priority: Priority.high,
+      showWhen: true,
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      sound: 'default',
+    );
+    final details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    // Convert provided local DateTime to tz-local DateTime
+    final tzDateTime = tz.TZDateTime(
+      tz.local,
+      dateTime.year,
+      dateTime.month,
+      dateTime.day,
+      dateTime.hour,
+      dateTime.minute,
+      dateTime.second,
+    );
+
+    await _localNotifications.zonedSchedule(
+      id,
+      title,
+      body,
+      tzDateTime,
+      details,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      payload: payload,
+    );
+  }
+
+  /// Cancel any scheduled notifications whose payload starts with a prefix
+  Future<void> cancelScheduledByPayloadPrefix(String prefix) async {
+    if (debugDryRun) {
+      _debugScheduled.removeWhere((e) => (e.payload ?? '').startsWith(prefix));
+      return;
+    }
+    final pending = await _localNotifications.pendingNotificationRequests();
+    for (final req in pending) {
+      final p = req.payload ?? '';
+      if (p.startsWith(prefix)) {
+        await _localNotifications.cancel(req.id);
+      }
+    }
+  }
+
+  // Debug visibility for tests only
+  @visibleForTesting
+  List<Map<String, dynamic>> debugGetScheduled() => List.unmodifiable(
+    _debugScheduled.map(
+      (e) => {
+        'id': e.id,
+        'title': e.title,
+        'body': e.body,
+        'payload': e.payload,
+        'hour': e.hour,
+        'minute': e.minute,
+      },
+    ),
+  );
 
   /// Show SOS emergency notification with user identification
   Future<void> showSOSNotification(SOSSession session) async {
@@ -526,3 +759,21 @@ class NotificationService {
 
 /// Notification importance levels
 enum NotificationImportance { low, defaultImportance, high, max }
+
+// Internal debug-only record for scheduled notifications
+class _DebugScheduled {
+  final int id;
+  final String title;
+  final String body;
+  final String? payload;
+  final int? hour;
+  final int? minute;
+  _DebugScheduled({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.payload,
+    required this.hour,
+    required this.minute,
+  });
+}

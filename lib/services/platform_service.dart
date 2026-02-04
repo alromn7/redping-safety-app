@@ -67,6 +67,22 @@ class PlatformService {
     }
   }
 
+  /// Best-effort carrier name lookup (Android only).
+  /// Used for readiness indicators (e.g., Starlink-enabled partner carriers).
+  static Future<String> getCarrierName() async {
+    if (!Platform.isAndroid) {
+      return 'Unknown';
+    }
+
+    try {
+      final String carrier = await platform.invokeMethod('getCarrierName');
+      return carrier.trim().isEmpty ? 'Unknown' : carrier;
+    } catch (e) {
+      // Non-fatal; carrier name is optional.
+      return 'Unknown';
+    }
+  }
+
   /// Check if app can run in background unrestricted
   static Future<bool> canRunInBackground() async {
     if (!Platform.isAndroid) {

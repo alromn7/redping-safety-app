@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RedPing Subscription Tiers</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: white;
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: rgba(255,255,255,0.9);
+            font-size: 20px;
+            margin-bottom: 50px;
+        }
+
+        .pricing-toggle {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 50px;
+        }
+
+        .toggle-label {
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 80px;
+            height: 40px;
+            background: rgba(255,255,255,0.3);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 32px;
+            height: 32px;
+            background: white;
+            border-radius: 50%;
+            transition: all 0.3s;
+        }
+
+        .toggle-switch.active {
+            background: #4CAF50;
+        }
+
+        .toggle-switch.active::after {
+            left: 44px;
+        }
+
+        .savings-badge {
+            background: #4CAF50;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .tiers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .tier-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            transition: transform 0.3s, box-shadow 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tier-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 50px rgba(0,0,0,0.3);
+        }
+
+        .tier-card.featured {
+            border: 3px solid #667eea;
+            transform: scale(1.05);
+        }
+
+        .tier-card.featured::before {
+            content: 'MOST POPULAR';
+            position: absolute;
+            top: 20px;
+            right: -35px;
+            background: #667eea;
+            color: white;
+            padding: 5px 40px;
+            transform: rotate(45deg);
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .tier-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .tier-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .tier-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .tier-description {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .pricing {
+            text-align: center;
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+
+        .price-amount {
+            font-size: 48px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .price-currency {
+            font-size: 24px;
+            vertical-align: super;
+        }
+
+        .price-period {
+            font-size: 16px;
+            color: #666;
+            margin-left: 5px;
+        }
+
+        .yearly-price {
+            display: none;
+        }
+
+        .yearly-savings {
+            color: #4CAF50;
+            font-size: 14px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .features-list {
+            list-style: none;
+            margin: 30px 0;
+        }
+
+        .features-list li {
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .features-list li:last-child {
+            border-bottom: none;
+        }
+
+        .check-icon {
+            color: #4CAF50;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .cross-icon {
+            color: #f44336;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .cta-button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .tier-card.free .cta-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .tier-card.ultra .pricing {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .tier-card.ultra .price-amount {
+            color: white;
+        }
+
+        .tier-card.ultra .price-period {
+            color: rgba(255,255,255,0.9);
+        }
+
+        .member-pricing {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+            font-style: italic;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 32px;
+            }
+            
+            .tiers-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .tier-card.featured {
+                transform: scale(1);
+            }
+        }
+
+        .highlight {
+            background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+            color: #333;
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛡️ RedPing Safety Plans</h1>
+        <p class="subtitle">Choose the perfect plan for your safety needs</p>
+
+        <div class="pricing-toggle">
+            <span class="toggle-label" id="monthly-label">Monthly</span>
+            <div class="toggle-switch" id="billing-toggle" onclick="toggleBilling()"></div>
+            <span class="toggle-label" id="yearly-label">Yearly</span>
+            <span class="savings-badge" id="savings-badge" style="display: none;">Save up to 17%</span>
+        </div>
+
+        <div class="tiers-grid">
+            <!-- FREE TIER -->
+            <div class="tier-card free">
+                <div class="tier-header">
+                    <div class="tier-icon">🆓</div>
+                    <h2 class="tier-name">Free</h2>
+                    <p class="tier-description">Essential safety for everyone</p>
+                </div>
+
+                <div class="pricing">
+                    <div class="monthly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">0</span>
+                        <span class="price-period">/month</span>
+                    </div>
+                    <div class="yearly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">0</span>
+                        <span class="price-period">/year</span>
+                    </div>
+                </div>
+
+                <ul class="features-list">
+                    <li><span class="check-icon">✓</span> RedPing 1-Tap Help (All Categories)</li>
+                    <li><span class="check-icon">✓</span> Community Chat (Full Access)</li>
+                    <li><span class="check-icon">✓</span> Quick Call Emergency Services</li>
+                    <li><span class="check-icon">✓</span> Basic Map Access</li>
+                    <li><span class="check-icon">✓</span> Manual SOS Activation</li>
+                    <li><span class="check-icon">✓</span> 2 Emergency Contacts</li>
+                    <li><span class="cross-icon">✗</span> Medical Profile</li>
+                    <li><span class="cross-icon">✗</span> Auto Crash/Fall Detection</li>
+                    <li><span class="cross-icon">✗</span> Hazard Alerts</li>
+                    <li><span class="cross-icon">✗</span> SOS SMS Alerts</li>
+                </ul>
+
+                <button class="cta-button">Get Started Free</button>
+            </div>
+
+            <!-- ESSENTIAL+ TIER -->
+            <div class="tier-card">
+                <div class="tier-header">
+                    <div class="tier-icon">💼</div>
+                    <h2 class="tier-name">Essential+</h2>
+                    <p class="tier-description">Complete protection with automatic detection</p>
+                </div>
+
+                <div class="pricing">
+                    <div class="monthly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">4.99</span>
+                        <span class="price-period">/month</span>
+                    </div>
+                    <div class="yearly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">49.99</span>
+                        <span class="price-period">/year</span>
+                        <div class="yearly-savings">Save $9.89 (17% off)</div>
+                    </div>
+                </div>
+
+                <ul class="features-list">
+                    <li><span class="check-icon">✓</span> Everything in Free</li>
+                    <li><span class="check-icon">✓</span> <strong>Medical Profile</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Auto Crash Detection</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Auto Fall Detection</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Hazard Alerts</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>SOS SMS Alerts</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> 5 Emergency Contacts</li>
+                    <li><span class="check-icon">✓</span> 5 Satellite Messages/month</li>
+                    <li><span class="cross-icon">✗</span> RedPing Activity Modes</li>
+                    <li><span class="cross-icon">✗</span> AI Safety Assistant</li>
+                </ul>
+
+                <button class="cta-button">Choose Essential+</button>
+            </div>
+
+            <!-- PRO TIER (FEATURED) -->
+            <div class="tier-card featured">
+                <div class="tier-header">
+                    <div class="tier-icon">🚀</div>
+                    <h2 class="tier-name">Pro</h2>
+                    <p class="tier-description">Advanced safety with AI & gadgets</p>
+                </div>
+
+                <div class="pricing">
+                    <div class="monthly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">9.99</span>
+                        <span class="price-period">/month</span>
+                    </div>
+                    <div class="yearly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">99.99</span>
+                        <span class="price-period">/year</span>
+                        <div class="yearly-savings">Save $19.89 (17% off)</div>
+                    </div>
+                </div>
+
+                <ul class="features-list">
+                    <li><span class="check-icon">✓</span> Everything in Essential+</li>
+                    <li><span class="check-icon">✓</span> <strong>RedPing Mode</strong> (6 Activity Modes) <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>AI Safety Assistant</strong> (24 Commands) <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Gadget Integration</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Full SAR Dashboard Access</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> Unlimited Emergency Contacts</li>
+                    <li><span class="check-icon">✓</span> 100 Satellite Messages/month</li>
+                    <li><span class="check-icon">✓</span> Advanced Activity Tracking</li>
+                    <li><span class="check-icon">✓</span> Priority Response</li>
+                    <li><span class="check-icon">✓</span> Community Leadership Features</li>
+                </ul>
+
+                <button class="cta-button">Choose Pro</button>
+            </div>
+
+            <!-- ULTRA TIER -->
+            <div class="tier-card ultra">
+                <div class="tier-header">
+                    <div class="tier-icon">🏢</div>
+                    <h2 class="tier-name">Ultra</h2>
+                    <p class="tier-description">Enterprise-grade safety management</p>
+                </div>
+
+                <div class="pricing">
+                    <div class="monthly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">29.99</span>
+                        <span class="price-period">/month</span>
+                        <div class="member-pricing">+ $5/month per Pro member</div>
+                    </div>
+                    <div class="yearly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">299.99</span>
+                        <span class="price-period">/year</span>
+                        <div class="member-pricing">+ $50/year per Pro member</div>
+                        <div class="yearly-savings">Save $59.89 (17% off)</div>
+                    </div>
+                </div>
+
+                <ul class="features-list">
+                    <li><span class="check-icon">✓</span> Everything in Pro</li>
+                    <li><span class="check-icon">✓</span> <strong>SAR Admin Management</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Unlimited Team Members</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Organization Dashboard</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> Team Performance Analytics</li>
+                    <li><span class="check-icon">✓</span> Multi-Organization Management</li>
+                    <li><span class="check-icon">✓</span> Unlimited Satellite Messages</li>
+                    <li><span class="check-icon">✓</span> Priority Support</li>
+                    <li><span class="check-icon">✓</span> Custom Integration APIs</li>
+                    <li><span class="check-icon">✓</span> White-Label Options</li>
+                </ul>
+
+                <button class="cta-button">Choose Ultra</button>
+            </div>
+
+            <!-- FAMILY TIER -->
+            <div class="tier-card">
+                <div class="tier-header">
+                    <div class="tier-icon">👨‍👩‍👧‍👦</div>
+                    <h2 class="tier-name">Family</h2>
+                    <p class="tier-description">Best value for families (4 accounts)</p>
+                </div>
+
+                <div class="pricing">
+                    <div class="monthly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">19.99</span>
+                        <span class="price-period">/month</span>
+                        <div class="member-pricing">1 Pro + 3 Essential+ accounts</div>
+                    </div>
+                    <div class="yearly-price">
+                        <span class="price-currency">$</span>
+                        <span class="price-amount">199.99</span>
+                        <span class="price-period">/year</span>
+                        <div class="member-pricing">1 Pro + 3 Essential+ accounts</div>
+                        <div class="yearly-savings">Save $39.89 (17% off)</div>
+                    </div>
+                </div>
+
+                <ul class="features-list">
+                    <li><span class="check-icon">✓</span> <strong>4 Accounts</strong> ($5 per account) <span class="highlight">BEST VALUE</span></li>
+                    <li><span class="check-icon">✓</span> 1 Pro Account (Full Features)</li>
+                    <li><span class="check-icon">✓</span> 3 Essential+ Accounts</li>
+                    <li><span class="check-icon">✓</span> <strong>Family Dashboard</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> <strong>Shared Emergency Contacts</strong> <span class="highlight">NEW</span></li>
+                    <li><span class="check-icon">✓</span> Family Location Sharing</li>
+                    <li><span class="check-icon">✓</span> Cross-Account Notifications</li>
+                    <li><span class="check-icon">✓</span> Family Chat Channel</li>
+                    <li><span class="check-icon">✓</span> 150 Satellite Messages/month</li>
+                    <li><span class="check-icon">✓</span> Family Activity Overview</li>
+                </ul>
+
+                <button class="cta-button">Choose Family</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isYearly = false;
+
+        function toggleBilling() {
+            isYearly = !isYearly;
+            const toggle = document.getElementById('billing-toggle');
+            const savingsBadge = document.getElementById('savings-badge');
+            const monthlyPrices = document.querySelectorAll('.monthly-price');
+            const yearlyPrices = document.querySelectorAll('.yearly-price');
+
+            toggle.classList.toggle('active');
+
+            if (isYearly) {
+                savingsBadge.style.display = 'inline-block';
+                monthlyPrices.forEach(price => price.style.display = 'none');
+                yearlyPrices.forEach(price => price.style.display = 'block');
+            } else {
+                savingsBadge.style.display = 'none';
+                monthlyPrices.forEach(price => price.style.display = 'block');
+                yearlyPrices.forEach(price => price.style.display = 'none');
+            }
+        }
+    </script>
+</body>
+</html>

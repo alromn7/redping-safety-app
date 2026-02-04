@@ -1,10 +1,13 @@
 // ignore_for_file: unused_field
 import 'package:flutter/material.dart';
+// import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../core/theme/app_theme.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/routing/app_router.dart';
 import '../../../../services/app_service_manager.dart';
+import '../../../../services/location_service.dart';
 import '../../../../models/sos_session.dart';
+// Safety Fund feature removed
 
 /// Safety dashboard showing detection status, settings, and history
 class SafetyDashboardPage extends StatefulWidget {
@@ -80,6 +83,29 @@ class _SafetyDashboardPageState extends State<SafetyDashboardPage> {
     super.dispose();
   }
 
+  Future<void> _openExternalMaps() async {
+    final current = _locationStatus['currentLocation'];
+    if (current is! Map) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Current location not available yet')),
+      );
+      return;
+    }
+
+    final lat = current['latitude'];
+    final lng = current['longitude'];
+    if (lat is! num || lng is! num) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Current location not available yet')),
+      );
+      return;
+    }
+
+    await LocationService.openMapApp(lat.toDouble(), lng.toDouble());
+  }
+
   double _computeCrashSensitivityProgress(double crashThreshold) {
     // Map 180..220 to 1.0..0.0
     final clamped = crashThreshold.clamp(180.0, 220.0);
@@ -113,6 +139,8 @@ class _SafetyDashboardPageState extends State<SafetyDashboardPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Safety Fund card removed
+
             // Detection Status Cards
             Row(
               children: [
@@ -289,10 +317,10 @@ class _SafetyDashboardPageState extends State<SafetyDashboardPage> {
                 const SizedBox(width: 16),
                 Expanded(
                   child: _buildActionButton(
-                    'Map',
-                    Icons.map,
+                    'Open Maps',
+                    Icons.map_outlined,
                     AppTheme.infoBlue,
-                    () => context.push(AppRouter.map),
+                    _openExternalMaps,
                   ),
                 ),
               ],

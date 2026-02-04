@@ -530,7 +530,7 @@ class PrivacySecurityService {
         status: PermissionStatus.notRequested,
         displayName: 'Location',
         description:
-            'Access your location for emergency services and activity tracking',
+            'Access your location for SOS alerts and activity tracking',
         purpose: 'Emergency response and safety monitoring',
         isRequired: true,
         purposes: const [

@@ -30,8 +30,7 @@ function getClientIp(req) {
 }
 
 function getAllowedOrigins() {
-  const cfg = functions.config().security || {};
-  const raw = cfg.allowed_origins || '';
+  const raw = process.env.SECURITY_ALLOWED_ORIGINS || '';
   return raw
     .split(',')
     .map((o) => o.trim())
@@ -71,11 +70,10 @@ function handleCors(req, res) {
 const crypto = require('crypto');
 
 function getSecurityConfig() {
-  const cfg = functions.config().security || {};
   return {
-    signingRequired: (cfg.signing_required || 'false').toString() === 'true',
-    skewSeconds: parseInt(cfg.signature_skew_seconds || '300', 10),
-    nonceTtlSeconds: parseInt(cfg.nonce_ttl_seconds || '900', 10),
+    signingRequired: (process.env.SECURITY_SIGNING_REQUIRED || 'false').toString() === 'true',
+    skewSeconds: parseInt(process.env.SECURITY_SIGNATURE_SKEW_SECONDS || '300', 10),
+    nonceTtlSeconds: parseInt(process.env.SECURITY_NONCE_TTL_SECONDS || '900', 10),
   };
 }
 
@@ -290,9 +288,9 @@ exports.generateAgoraToken = functions.https.onRequest(async (req, res) => {
       res.status(429).json({ error: 'Rate limit exceeded' });
       return;
     }
-    // Get Agora credentials from Firebase config
-    const appId = functions.config().agora?.app_id;
-    const appCertificate = functions.config().agora?.app_certificate;
+    // Get Agora credentials from environment variables
+    const appId = process.env.AGORA_APP_ID;
+    const appCertificate = process.env.AGORA_APP_CERTIFICATE;
 
     if (!appId || !appCertificate) {
       console.error('Agora credentials not configured');
@@ -396,8 +394,8 @@ exports.generateAgoraTokenWithAccount = functions.https.onRequest(async (req, re
       res.status(429).json({ error: 'Rate limit exceeded' });
       return;
     }
-    const appId = functions.config().agora?.app_id;
-    const appCertificate = functions.config().agora?.app_certificate;
+    const appId = process.env.AGORA_APP_ID;
+    const appCertificate = process.env.AGORA_APP_CERTIFICATE;
 
     if (!appId || !appCertificate) {
       res.status(500).json({ error: 'Server configuration error' });
@@ -478,7 +476,11 @@ exports.sendSMS = functions.https.onRequest(async (req, res) => {
     }
 
     // If Twilio is configured, attempt to send via Twilio. Otherwise, return a mock response.
-    const twilioCfg = functions.config().twilio || {};
+    const twilioCfg = {
+      account_sid: process.env.TWILIO_ACCOUNT_SID,
+      auth_token: process.env.TWILIO_AUTH_TOKEN,
+      phone_number: process.env.TWILIO_PHONE_NUMBER
+    };
     const hasTwilio = !!(twilioCfg.account_sid && twilioCfg.auth_token && twilioCfg.phone_number);
 
     if (hasTwilio) {
@@ -512,7 +514,7 @@ exports.sendSMS = functions.https.onRequest(async (req, res) => {
       success: true,
       messageId: `mock_${Date.now()}`,
       provider: 'mock',
-      note: 'Twilio not configured - returning mock success. Configure functions.config().twilio for real sends.',
+      note: 'Twilio not configured - returning mock success. Set TWILIO_* environment variables for real sends.',
       timestamp: timestamp || new Date().toISOString(),
     });
 

@@ -52,3 +52,14 @@ RedPing Safety Ecosystem – Pitch Deck
  Sensor thresholds may vary by device. Offline mesh limited by density of other RedPing users.
  Satellite SOS only works if supported by device/provider. Continuous motion/location sampling may
 drain battery. Must comply with local data/consent regulations.
+
+storeFile=android/keystore/redping-release.jks
+storePassword=yudefsJR1978redping*#
+keyAlias=redping_release
+keyPassword=yudefsJR1978redping*#*#
+
+mkdir android\keystore
+
+keytool -genkeypair -v -keystore android\keystore\redping-release.jks -storetype JKS -keyalg RSA -keysize 4096 -validity 12000 -alias redping_release
+
+keytool -list -v -keystore android\keystore\redping-release.jks

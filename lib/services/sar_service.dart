@@ -233,6 +233,212 @@ class SARService {
     }
   }
 
+  /// Handle fall detection alert from RedPing Doctor Plus
+  Future<void> handleFallDetectionAlert({
+    required String sosSessionId,
+    required String userId,
+    required String userName,
+    required LocationInfo location,
+    required Map<String, dynamic> fallDetails,
+    required Map<String, dynamic> medicalContext,
+    List<String> emergencyContactIds = const [],
+  }) async {
+    try {
+      // Extract fall severity and details
+      final severity = fallDetails['severity'] ?? 'moderate';
+      final impactForce = fallDetails['impactForce'] ?? 0.0;
+      final responseStatus = fallDetails['responseStatus'] ?? 'no_response';
+      final detectionTime = fallDetails['timestamp'] != null
+          ? DateTime.parse(fallDetails['timestamp'])
+          : DateTime.now();
+
+      // Determine priority based on fall severity and medical context
+      final priority = _determineFallPriority(severity, medicalContext);
+      final urgencyLevel = _determineFallUrgency(
+        severity,
+        responseStatus,
+        medicalContext,
+      );
+
+      // Format medical context for display
+      final bloodType = medicalContext['bloodType'] ?? 'Unknown';
+      final allergies =
+          (medicalContext['allergies'] as List<dynamic>?)?.cast<String>() ?? [];
+      final medications =
+          (medicalContext['medications'] as List<dynamic>?)?.cast<String>() ??
+          [];
+      final conditions =
+          (medicalContext['conditions'] as List<dynamic>?)?.cast<String>() ??
+          [];
+
+      final medicalInfo = StringBuffer();
+      medicalInfo.writeln('Blood Type: $bloodType');
+      if (allergies.isNotEmpty) {
+        medicalInfo.writeln('Allergies: ${allergies.join(", ")}');
+      }
+      if (medications.isNotEmpty) {
+        medicalInfo.writeln('Current Medications: ${medications.join(", ")}');
+      }
+      if (conditions.isNotEmpty) {
+        medicalInfo.writeln('Medical Conditions: ${conditions.join(", ")}');
+      }
+
+      // Create SARUpdate for fall detection
+      final fallUpdate = SARUpdate(
+        id: _generateUpdateId(),
+        userId: 'fall_detection_system',
+        timestamp: DateTime.now(),
+        message:
+            '🚨 FALL DETECTED: $severity fall detected for $userName at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}\n'
+            'Impact Force: ${impactForce.toStringAsFixed(2)}g\n'
+            'Response Status: $responseStatus\n'
+            'Medical Context:\n${medicalInfo.toString()}',
+        type: SARUpdateType.sosAlert,
+        location: location,
+        data: {
+          'sosSessionId': sosSessionId,
+          'sosType': 'fall_detection',
+          'userId': userId,
+          'userName': userName,
+          'emergencyContacts': emergencyContactIds,
+          'fallDetails': fallDetails,
+          'medicalContext': medicalContext,
+          'severity': severity,
+          'impactForce': impactForce,
+          'responseStatus': responseStatus,
+          'detectionTime': detectionTime.toIso8601String(),
+          'urgencyLevel': urgencyLevel,
+          'priority': priority.name,
+          'bloodType': bloodType,
+          'allergies': allergies,
+          'medications': medications,
+          'conditions': conditions,
+        },
+      );
+
+      // Create or update SAR session for fall response
+      if (_currentSession != null && _currentSession!.isActive) {
+        _currentSession = _currentSession!.copyWith(
+          updates: [..._currentSession!.updates, fallUpdate],
+        );
+      } else {
+        // Create new emergency SAR session for fall response
+        _currentSession = SARSession(
+          id: _generateSessionId(),
+          userId: 'sar_coordinator',
+          type: SARType.medicalEmergency,
+          status: SARStatus.initiated,
+          startTime: DateTime.now(),
+          lastKnownLocation: location,
+          locationHistory: [location],
+          priority: priority,
+          description:
+              'Fall detection alert - $severity fall for $userName with $responseStatus',
+          equipmentList: ['Medical Kit', 'AED', 'Stretcher'],
+          estimatedPersons: 1,
+          weatherInfo: SARWeatherInfo(
+            temperature: 20.0,
+            conditions: 'Unknown',
+            windSpeed: 0.0,
+            windDirection: 'Unknown',
+            visibility: 10.0,
+            precipitation: 0.0,
+            timestamp: DateTime.now(),
+          ),
+          terrainInfo: SARTerrainInfo(
+            elevation: 0.0,
+            terrainType: 'Urban',
+            difficulty: 'Low',
+            hazards: [],
+            searchRadius: 500.0,
+            accessMethod: 'Ground',
+          ),
+          rescueTeamIds: [],
+          updates: [fallUpdate],
+        );
+      }
+
+      // Show high-priority notification for fall detection
+      await _notificationService.showNotification(
+        title: '🚨 Fall Detection Alert - $severity',
+        body:
+            '$userName fell and is $responseStatus. Medical history available.',
+        payload: 'fall_alert:$sosSessionId:$userId',
+      );
+
+      // Trigger callbacks
+      _onUpdateReceived?.call(fallUpdate);
+      if (_currentSession != null) {
+        _onSessionStarted?.call(_currentSession!);
+      }
+
+      AppLogger.i(
+        'Handled fall detection alert for $userName (severity: $severity)',
+        tag: 'SARService',
+      );
+    } catch (e) {
+      AppLogger.e(
+        'Error handling fall detection alert',
+        tag: 'SARService',
+        error: e,
+      );
+      throw Exception('Failed to handle fall detection alert: $e');
+    }
+  }
+
+  /// Determine SAR priority based on fall severity and medical context
+  SARPriority _determineFallPriority(
+    String severity,
+    Map<String, dynamic> medicalContext,
+  ) {
+    // Check for high-risk medical conditions
+    final conditions =
+        (medicalContext['conditions'] as List<dynamic>?)?.cast<String>() ?? [];
+    final hasHighRiskCondition = conditions.any(
+      (condition) =>
+          condition.toLowerCase().contains('heart') ||
+          condition.toLowerCase().contains('stroke') ||
+          condition.toLowerCase().contains('diabetes') ||
+          condition.toLowerCase().contains('blood thinner'),
+    );
+
+    if (severity == 'critical' || hasHighRiskCondition) {
+      return SARPriority.critical;
+    } else if (severity == 'severe') {
+      return SARPriority.high;
+    } else {
+      return SARPriority.medium;
+    }
+  }
+
+  /// Determine urgency level for fall based on severity, response, and medical context
+  String _determineFallUrgency(
+    String severity,
+    String responseStatus,
+    Map<String, dynamic> medicalContext,
+  ) {
+    // No response or critical fall = CRITICAL urgency
+    if (responseStatus == 'no_response' || severity == 'critical') {
+      return 'CRITICAL';
+    }
+
+    // Severe fall with high-risk conditions = HIGH urgency
+    final conditions =
+        (medicalContext['conditions'] as List<dynamic>?)?.cast<String>() ?? [];
+    final hasHighRiskCondition = conditions.any(
+      (condition) =>
+          condition.toLowerCase().contains('heart') ||
+          condition.toLowerCase().contains('bleeding') ||
+          condition.toLowerCase().contains('anticoagulant'),
+    );
+
+    if (severity == 'severe' || hasHighRiskCondition) {
+      return 'HIGH';
+    }
+
+    return 'MEDIUM';
+  }
+
   /// Determine urgency level based on incident type and impact
   String _determineUrgencyLevel(String incidentType, String impactDetails) {
     final criticalIncidents = [

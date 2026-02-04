@@ -305,8 +305,8 @@ class _RecommendationsCard extends StatelessWidget {
         .getRecommendedSensorInterval();
     final locInterval = serviceManager.batteryOptimizationService
         .getRecommendedLocationInterval();
-    final aiInterval = serviceManager.batteryOptimizationService
-        .getRecommendedAIProcessingInterval();
+    final backgroundInterval = serviceManager.batteryOptimizationService
+      .getRecommendedBackgroundProcessingInterval();
 
     return Card(
       child: Padding(
@@ -330,7 +330,7 @@ class _RecommendationsCard extends StatelessWidget {
             const SizedBox(height: 12),
             _kv('Sensors', '${sensorInterval.inMilliseconds} ms'),
             _kv('Location', _fmt(locInterval)),
-            _kv('AI Processing', _fmt(aiInterval)),
+            _kv('Background Processing', _fmt(backgroundInterval)),
           ],
         ),
       ),

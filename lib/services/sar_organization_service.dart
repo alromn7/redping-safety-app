@@ -8,10 +8,10 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/sar_organization.dart';
 import '../models/sar_identity.dart' as sar_identity;
-import '../models/chat_message.dart';
+// chat_message import removed - no longer needed
 import 'user_profile_service.dart';
 import 'notification_service.dart';
-import 'chat_service.dart';
+// ChatService import removed - SAR messaging uses SARMessagingService
 
 /// Service for managing SAR organizations and operations
 class SAROrganizationService {
@@ -22,7 +22,7 @@ class SAROrganizationService {
 
   final UserProfileService _userProfileService = UserProfileService();
   final NotificationService _notificationService = NotificationService();
-  final ChatService _chatService = ChatService();
+  // ChatService removed - no longer used
 
   List<SAROrganization> _organizations = [];
   List<SAROrganizationMember> _members = [];
@@ -581,54 +581,29 @@ class SAROrganizationService {
     }
   }
 
-  /// Create organization chat room
+  /// Create organization chat room (disabled - community chat removed)
   Future<void> _createOrganizationChatRoom(SAROrganization organization) async {
-    try {
-      await _chatService.sendMessage(
-        chatId: 'org_${organization.id}',
-        content: '🏢 ${organization.organizationName} chat room created',
-        type: MessageType.announcement,
-        priority: MessagePriority.low,
-      );
-    } catch (e) {
-      debugPrint(
-        'SAROrganizationService: Error creating organization chat - $e',
-      );
-    }
+    // Community chat removed - now available on website only
+    debugPrint(
+      'SAROrganizationService: Organization chat room creation disabled',
+    );
   }
 
-  /// Create operation chat room
+  /// Create operation chat room (disabled - community chat removed)
   Future<void> _createOperationChatRoom(
     SAROrganizationOperation operation,
   ) async {
-    try {
-      await _chatService.sendMessage(
-        chatId: 'op_${operation.id}',
-        content: '🚁 Operation "${operation.operationName}" started',
-        type: MessageType.announcement,
-        priority: MessagePriority.high,
-      );
-    } catch (e) {
-      debugPrint('SAROrganizationService: Error creating operation chat - $e');
-    }
+    // Community chat removed - now available on website only
+    debugPrint('SAROrganizationService: Operation chat room creation disabled');
   }
 
-  /// Add member to organization chat
+  /// Add member to organization chat (disabled - community chat removed)
   Future<void> _addMemberToOrganizationChat(
     String organizationId,
     SAROrganizationMember member,
   ) async {
-    try {
-      await _chatService.sendMessage(
-        chatId: 'org_$organizationId',
-        content:
-            '👋 ${member.memberName} joined as ${_getMemberRoleDisplayName(member.role)}',
-        type: MessageType.announcement,
-        priority: MessagePriority.low,
-      );
-    } catch (e) {
-      debugPrint('SAROrganizationService: Error adding member to chat - $e');
-    }
+    // Community chat removed - now available on website only
+    debugPrint('SAROrganizationService: Member chat notification disabled');
   }
 
   /// Notify admins for organization verification
@@ -689,16 +664,9 @@ class SAROrganizationService {
         importance: NotificationImportance.high,
       );
 
-      // Send to operation chat
-      await _chatService.sendMessage(
-        chatId: 'op_${operation.id}',
-        content:
-            '🚁 Operation "${operation.operationName}" started\n'
-            '📍 Location: ${operation.location.locationName ?? 'Coordinates provided'}\n'
-            '⚠️ Priority: ${_getPriorityDisplayName(operation.priority)}\n'
-            '👥 Assigned: ${operation.assignedMemberIds.length} members',
-        type: MessageType.sosUpdate,
-        priority: MessagePriority.high,
+      // Chat messaging removed - community chat now available on website only
+      debugPrint(
+        'SAROrganizationService: Operation chat notification disabled',
       );
     } catch (e) {
       debugPrint(
@@ -707,25 +675,16 @@ class SAROrganizationService {
     }
   }
 
-  /// Notify operation updated
+  /// Notify operation updated (disabled - community chat removed)
   Future<void> _notifyOperationUpdated(
     SAROrganizationOperation operation,
     String? update,
   ) async {
     if (update == null) return;
-
-    try {
-      await _chatService.sendMessage(
-        chatId: 'op_${operation.id}',
-        content: '📝 Operation Update: $update',
-        type: MessageType.sosUpdate,
-        priority: MessagePriority.normal,
-      );
-    } catch (e) {
-      debugPrint(
-        'SAROrganizationService: Error notifying operation update - $e',
-      );
-    }
+    // Community chat removed - now available on website only
+    debugPrint(
+      'SAROrganizationService: Operation update chat notification disabled',
+    );
   }
 
   /// Get member role display name

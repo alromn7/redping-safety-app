@@ -1,5 +1,6 @@
 // ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
+import 'package:flutter_stripe/flutter_stripe.dart' as stripe;
 import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../services/payment_service.dart';
@@ -116,132 +117,73 @@ class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
     }
   }
 
-  void _showAddPaymentMethodDialog() {
-    final cardNumberController = TextEditingController();
-    final cardholderNameController = TextEditingController();
-    final expMonthController = TextEditingController();
-    final expYearController = TextEditingController();
-    final cvcController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
+  Future<void> _showAddPaymentMethodDialog() async {
     bool isProcessing = false;
+    bool isCardComplete = false;
 
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Add Payment Method'),
-          content: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextFormField(
-                    controller: cardNumberController,
-                    decoration: const InputDecoration(
-                      labelText: 'Card Number',
-                      hintText: '1234 5678 9012 3456',
-                      prefixIcon: Icon(Icons.credit_card),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Enter your card details',
+                  style: TextStyle(fontSize: 14, color: AppTheme.secondaryText),
+                ),
+                const SizedBox(height: 16),
+                // Stripe CardField widget (simpler, directly integrates with SDK)
+                stripe.CardField(
+                  onCardChanged: (card) {
+                    setDialogState(() {
+                      isCardComplete = card?.complete ?? false;
+                    });
+                  },
+                  style: const TextStyle(color: Colors.black),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppTheme.neutralGray),
                     ),
-                    keyboardType: TextInputType.number,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Enter card number';
-                      }
-                      final digitsOnly = value.replaceAll(RegExp(r'\D'), '');
-                      if (digitsOnly.length < 13 || digitsOnly.length > 16) {
-                        return 'Invalid card number';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: cardholderNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Cardholder Name',
-                      prefixIcon: Icon(Icons.person),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppTheme.neutralGray),
                     ),
-                    textCapitalization: TextCapitalization.words,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Enter cardholder name';
-                      }
-                      return null;
-                    },
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(
+                        color: AppTheme.infoBlue,
+                        width: 2,
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: expMonthController,
-                          decoration: const InputDecoration(
-                            labelText: 'MM',
-                            prefixIcon: Icon(Icons.calendar_today),
-                          ),
-                          keyboardType: TextInputType.number,
-                          maxLength: 2,
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'MM';
-                            }
-                            final month = int.tryParse(value);
-                            if (month == null || month < 1 || month > 12) {
-                              return 'Invalid';
-                            }
-                            return null;
-                          },
-                        ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.lock_outline,
+                      size: 16,
+                      color: AppTheme.secondaryText,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Secured by Stripe',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.secondaryText,
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          controller: expYearController,
-                          decoration: const InputDecoration(labelText: 'YY'),
-                          keyboardType: TextInputType.number,
-                          maxLength: 2,
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'YY';
-                            }
-                            final year = int.tryParse(value);
-                            if (year == null) {
-                              return 'Invalid';
-                            }
-                            final currentYear = DateTime.now().year % 100;
-                            if (year < currentYear) {
-                              return 'Expired';
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          controller: cvcController,
-                          decoration: const InputDecoration(
-                            labelText: 'CVC',
-                            prefixIcon: Icon(Icons.lock),
-                          ),
-                          keyboardType: TextInputType.number,
-                          maxLength: 4,
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'CVC';
-                            }
-                            if (value.length < 3) {
-                              return 'Invalid';
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           actions: [
@@ -252,33 +194,52 @@ class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: isProcessing
+              onPressed: (!isCardComplete || isProcessing)
                   ? null
                   : () async {
-                      if (!formKey.currentState!.validate()) return;
-
                       setDialogState(() => isProcessing = true);
 
                       try {
-                        final cardNumber = cardNumberController.text.replaceAll(
-                          RegExp(r'\D'),
-                          '',
-                        );
-                        final expMonth = int.parse(expMonthController.text);
-                        final expYear = int.parse(expYearController.text);
+                        debugPrint('Creating token from CardField data...');
 
+                        // Create token first (CardField automatically provides card data to SDK)
+                        final tokenData = await stripe.Stripe.instance
+                            .createToken(
+                              const stripe.CreateTokenParams.card(
+                                params: stripe.CardTokenParams(),
+                              ),
+                            );
+
+                        debugPrint(
+                          'Token created successfully: ${tokenData.id}',
+                        );
+
+                        // Create payment method from token
+                        final paymentMethod = await stripe.Stripe.instance
+                            .createPaymentMethod(
+                              params: stripe.PaymentMethodParams.cardFromToken(
+                                paymentMethodData:
+                                    stripe.PaymentMethodDataCardFromToken(
+                                      token: tokenData.id,
+                                    ),
+                              ),
+                            );
+
+                        debugPrint(
+                          'Payment method created: ${paymentMethod.id}',
+                        );
+
+                        // Save to local service
                         await _paymentService.addPaymentMethod(
                           type: PaymentMethodType.creditCard,
-                          cardNumber: cardNumber,
-                          expMonth: expMonth,
-                          expYear: expYear,
-                          cvc: cvcController.text,
+                          cardNumber: paymentMethod.card.last4 ?? '****',
+                          expMonth: paymentMethod.card.expMonth ?? 1,
+                          expYear: paymentMethod.card.expYear ?? 2025,
+                          cvc: '***',
                           setAsDefault: true,
                         );
 
                         if (mounted) {
-
-
                           Navigator.pop(dialogContext);
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
@@ -290,18 +251,20 @@ class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
                           );
                           await _loadPaymentMethods();
                         }
-
                       } catch (e) {
+                        debugPrint('Error adding payment method: $e');
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text('Error adding payment method: $e'),
+                              content: Text('Error: ${e.toString()}'),
                               backgroundColor: AppTheme.criticalRed,
                             ),
                           );
                         }
                       } finally {
-                        setDialogState(() => isProcessing = false);
+                        if (mounted) {
+                          setDialogState(() => isProcessing = false);
+                        }
                       }
                     },
               child: isProcessing

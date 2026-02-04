@@ -6,7 +6,6 @@ import 'package:uuid/uuid.dart';
 import '../models/redping_mode.dart';
 import 'sensor_service.dart';
 import 'location_service.dart';
-import 'feature_access_service.dart';
 
 /// RedPing Mode Service - Manages activity-based safety modes
 class RedPingModeService extends ChangeNotifier {
@@ -16,8 +15,6 @@ class RedPingModeService extends ChangeNotifier {
 
   final SensorService _sensorService = SensorService();
   final LocationService _locationService = LocationService();
-  final FeatureAccessService _featureAccessService =
-      FeatureAccessService.instance;
   final Uuid _uuid = const Uuid();
 
   // Current active mode
@@ -41,15 +38,6 @@ class RedPingModeService extends ChangeNotifier {
 
   /// Activate a mode
   Future<void> activateMode(RedPingMode mode) async {
-    // 🔒 SUBSCRIPTION GATE: RedPing Mode requires Pro or above
-    if (!_featureAccessService.hasFeatureAccess('redpingMode')) {
-      debugPrint(
-        '⚠️ RedPingModeService: RedPing Mode not available - Requires Pro plan',
-      );
-      debugPrint('   Upgrade to Pro for Activity-Based Safety Modes');
-      throw Exception('RedPing Mode requires Pro subscription');
-    }
-
     try {
       // End current session if exists
       if (_activeSession != null) {
@@ -122,14 +110,30 @@ class RedPingModeService extends ChangeNotifier {
   /// Apply sensor configuration
   Future<void> _applySensorConfig(SensorConfig config) async {
     try {
-      // Store config for reference (thresholds are currently hardcoded in sensor service)
-      // Future enhancement: Make sensor service thresholds configurable
+      // Apply RedPing Mode overrides into SensorService
+      await _sensorService.applyRedPingModeConfig(config);
+
+      // Ensure monitoring is active with location tracking
+      final desiredLowPower = switch (config.powerMode) {
+        PowerMode.high => false,
+        PowerMode.low => true,
+        PowerMode.balanced => true,
+      };
 
       // Ensure monitoring is active with location tracking
       await _sensorService.startMonitoring(
         locationService: _locationService,
-        lowPowerMode: true,
+        lowPowerMode: desiredLowPower,
       );
+
+      // If already monitoring, apply power mode preference (avoid toggling if SOS already forced active)
+      if (_sensorService.isMonitoring) {
+        if (config.powerMode == PowerMode.high && _sensorService.isLowPowerMode) {
+          await _sensorService.setActiveMode();
+        } else if (config.powerMode == PowerMode.low && !_sensorService.isLowPowerMode) {
+          await _sensorService.setLowPowerMode();
+        }
+      }
 
       debugPrint(
         '✅ Sensor config applied: Crash=${config.crashThreshold} Fall=${config.fallThreshold}',
@@ -159,8 +163,7 @@ class RedPingModeService extends ChangeNotifier {
   /// Reset to default configurations
   Future<void> _resetToDefaults() async {
     try {
-      // Currently using service defaults
-      // Future enhancement: Explicit reset methods
+      await _sensorService.clearRedPingModeConfig();
 
       debugPrint('✅ Reset to default configurations');
     } catch (e) {
@@ -321,7 +324,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 5),
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           preferredRescue: RescueType.aerial,
         ),
         activeHazardTypes: ['fall', 'altitude', 'weather'],
@@ -354,7 +357,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 5),
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           enableVideoEvidence: true,
         ),
         activeHazardTypes: ['impact', 'fall', 'chemical', 'confined_space'],
@@ -427,7 +430,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 5),
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           preferredRescue: RescueType.aerial,
         ),
         activeHazardTypes: ['avalanche', 'tree_well', 'altitude', 'cold'],
@@ -461,7 +464,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 5),
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           preferredRescue: RescueType.aerial,
         ),
         activeHazardTypes: ['fall', 'altitude', 'rope_failure', 'weather'],
@@ -536,7 +539,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 10),
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           preferredRescue: RescueType.ground,
         ),
         activeHazardTypes: ['crash', 'fall', 'terrain', 'wildlife'],
@@ -571,7 +574,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 0), // Immediate for man overboard
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           emergencyMessage: 'MAN OVERBOARD - Immediate assistance required',
           preferredRescue: RescueType.marine,
         ),
@@ -605,7 +608,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 0), // Immediate for dive emergency
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           emergencyMessage: 'DIVE EMERGENCY - Medical assistance required',
           preferredRescue: RescueType.marine,
         ),
@@ -645,7 +648,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 0), // Immediate
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           emergencyMessage: 'SWIMMER IN DISTRESS - Immediate rescue needed',
           preferredRescue: RescueType.marine,
         ),
@@ -760,7 +763,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 0), // Immediate
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           emergencyMessage:
               'SKYDIVING EMERGENCY - Parachute malfunction or hard landing',
           preferredRescue: RescueType.aerial,
@@ -808,7 +811,7 @@ class RedPingModeService extends ChangeNotifier {
         ),
         emergencyConfig: const EmergencyConfig(
           sosCountdown: Duration(seconds: 0), // Immediate
-          autoCallEmergency: true,
+          autoCallEmergency: false,
           emergencyMessage:
               'AIRCRAFT EMERGENCY - Immediate assistance required',
           preferredRescue: RescueType.aerial,

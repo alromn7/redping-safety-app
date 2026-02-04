@@ -92,7 +92,7 @@ flutter pub get    # ✅ 111 dependencies resolved
 |----------|---------|-----|--------|
 | **Bundle ID** | `com.redping.redping` | `com.redping.redping` | ✅ Match |
 | **Display Name** | REDP!NG Safety | REDP!NG Safety | ✅ Match |
-| **Version** | 1.0.1+2 | 1.0.1+2 | ✅ Match |
+| **Version** | 1.0.1+3 | 1.0.1+3 | ✅ Match |
 | **Min SDK/OS** | API 24 (Android 7.0) | iOS 12.0+ | ✅ Modern |
 | **Target SDK/OS** | API 36 (Android 14) | Latest iOS | ✅ Current |
 

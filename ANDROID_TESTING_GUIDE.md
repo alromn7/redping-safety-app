@@ -17,7 +17,7 @@ Output: app-release.apk (94.8MB)
 
 ### Configuration
 - **Bundle ID:** `com.redping.redping`
-- **Version:** 1.0.1+2
+- **Version:** 1.0.1+3
 - **Target SDK:** API 36 (Android 14)
 - **Min SDK:** API 24 (Android 7.0)
 - **ABI:** arm64-v8a only (optimized)
@@ -375,7 +375,7 @@ London, UK: 51.5074, -0.1278
 ### Device Information
 - Device: Pixel 7 Pro
 - Android Version: 16 (API 36)
-- App Version: 1.0.1+2
+- App Version: 1.0.1+3
 
 ### Steps to Reproduce
 1. [Step 1]

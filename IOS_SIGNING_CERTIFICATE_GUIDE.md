@@ -177,7 +177,7 @@ flutter run --release
 ### Build Archive for Submission
 ```bash
 # 1. Update version in pubspec.yaml
-# version: 1.0.1+2
+# version: 1.0.1+3
 
 # 2. Build iOS archive
 flutter build ipa --release

@@ -15,8 +15,8 @@ Certificate (current):
 Note: This repo builds multiple Android flavors (e.g. `sos`, `sar`). A plain
 `flutter build apk --release` may succeed in Gradle but Flutter may not locate the
 APK under the default `app-release.apk` name. Expected outputs:
-- `build/app/outputs/apk/sos/release/app-sos-release.apk`
-- `build/app/outputs/apk/sar/release/app-sar-release.apk`
+- `build/app/outputs/flutter-apk/app-sos-release.apk`
+- `build/app/outputs/flutter-apk/app-sar-release.apk`
 
 ## 2. Create Annotated Tag
 ```
@@ -51,9 +51,15 @@ Ensure output SHA-256 matches `53b37f0b16d52918a6c4d0477200a3214b334f5fd36d14677
 - [ ] Confirm no fallback to debug certificate (CN=Android Debug should NOT appear).
 
 ## 4a. Latest Local Verification (2026-02-04)
-Artifacts found under `build/app/outputs/apk/...`:
-- SOS: `build/app/outputs/apk/sos/release/app-sos-release.apk`
-- SAR: `build/app/outputs/apk/sar/release/app-sar-release.apk`
+Tag: `v1.0.1+3`
+
+Artifacts found under `build/app/outputs/flutter-apk/...`:
+- SOS: `build/app/outputs/flutter-apk/app-sos-release.apk`
+- SAR: `build/app/outputs/flutter-apk/app-sar-release.apk`
+
+Package versions (from `aapt dump badging`):
+- SOS: `com.redping.redping` versionCode `3`, versionName `1.0.1`
+- SAR: `com.redping.redping.sar` versionCode `3`, versionName `1.0.1-sar`
 
 `apksigner verify --print-certs` results (SOS + SAR):
 - DN: `CN=Redping, O=Redping, L=City, ST=State, C=US`

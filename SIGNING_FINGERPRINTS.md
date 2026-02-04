@@ -13,7 +13,8 @@ Maintain historical signing certificate fingerprints for auditing, rollback, and
 ### Verification Commands
 PowerShell (Windows):
 ```
-& "C:\Users\$Env:USERNAME\AppData\Local\Android\Sdk\build-tools\36.0.0\apksigner.bat" verify --print-certs build\app\outputs\flutter-apk\app-release.apk
+& "C:\Users\$Env:USERNAME\AppData\Local\Android\Sdk\build-tools\36.0.0\apksigner.bat" verify --print-certs build\app\outputs\flutter-apk\app-sos-release.apk
+& "C:\Users\$Env:USERNAME\AppData\Local\Android\Sdk\build-tools\36.0.0\apksigner.bat" verify --print-certs build\app\outputs\flutter-apk\app-sar-release.apk
 ```
 Expected output contains DN above and matching SHA-256.
 

@@ -1,18 +1,18 @@
 // ignore_for_file: use_build_context_synchronously
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter/foundation.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/routing/app_router.dart';
-import '../../../../widgets/system_health_card.dart';
 import '../../../../services/app_service_manager.dart';
-import '../../../sos/presentation/widgets/status_indicator.dart';
+import '../../../../services/location_service.dart';
+import '../../../../services/google_cloud_api_service.dart';
 import '../../../sos/presentation/widgets/emergency_info_card.dart';
 import '../../../privacy/presentation/widgets/privacy_dashboard_card.dart';
-import '../../../onboarding/ai_permission_request.dart';
 import '../../../../config/testing_mode.dart';
 import '../../../../core/constants/app_constants.dart';
-import '../../../../services/google_cloud_api_service.dart';
 import '../../../../tools/nonce_ttl_verifier.dart';
 
 /// Settings page for app configuration and preferences
@@ -36,6 +36,9 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _communityAlertsEnabled = true;
   bool _soundEnabled = true;
   bool _vibrationEnabled = true;
+  bool _medicalRemindersEnabled = true;
+  bool _healthMonitoringEnabled = false;
+  bool _snoringDetectionEnabled = false;
   // Sensitivity sliders: 0.0..1.0 (1.0 = most sensitive allowed by blueprint)
   double _crashSensitivity = 1.0; // maps to 180 m/s² at 1.0
   double _fallSensitivity = 0.85; // maps near 150 m/s² at ~0.83..0.85
@@ -43,17 +46,171 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _alwaysSmsFallback = false;
   bool _alwaysAllowEmergencySms = false;
 
-  // Status tracking for status indicator (now dynamic)
+  // Status tracking
   bool _locationServicesEnabled = false;
-  final String _batteryLevel = '85%';
-  final String _networkStatus = 'Connected';
   bool _isRefreshing = false;
+  Timer? _statusRefreshTimer;
+
+  // Dev flight simulation (debug only)
+  bool _devSimFlight = false;
+  double _devSimSpeedKmh = 280.0;
+  double _devSimAltitudeM = 9000.0;
 
   @override
   void initState() {
     super.initState();
     _loadPrefs();
     _refreshLocationStatus();
+    _startStatusRefresh();
+  }
+
+  @override
+  void dispose() {
+    _statusRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _applyDevFlightOverride({required bool enabled}) async {
+    try {
+      final ls = LocationService();
+      await ls.initialize();
+      if (enabled) {
+        await ls.startTracking();
+        ls.setDebugOverride(
+          enabled: true,
+          speedMps: _devSimSpeedKmh / 3.6,
+          altitudeM: _devSimAltitudeM,
+        );
+      } else {
+        ls.setDebugOverride(enabled: false);
+      }
+    } catch (e) {
+      debugPrint('Settings Dev Flight Override error: $e');
+    }
+  }
+
+  void _openDevFlightSimulator() {
+    if (!kDebugMode) return;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        bool enabled = _devSimFlight;
+        double speed = _devSimSpeedKmh;
+        double alt = _devSimAltitudeM;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            void syncApply() {
+              setState(() {
+                _devSimFlight = enabled;
+                _devSimSpeedKmh = speed;
+                _devSimAltitudeM = alt;
+              });
+              _applyDevFlightOverride(enabled: enabled);
+            }
+
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.flight_takeoff),
+                      SizedBox(width: 8),
+                      Text('Developer Flight Simulator',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    title: const Text('Simulate Flight'),
+                    subtitle: const Text('Overrides GPS speed/altitude in-app'),
+                    value: enabled,
+                    onChanged: (v) {
+                      setModalState(() => enabled = v);
+                      syncApply();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Opacity(
+                    opacity: enabled ? 1.0 : 0.5,
+                    child: IgnorePointer(
+                      ignoring: !enabled,
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Speed (km/h)'),
+                              Text(speed.toStringAsFixed(0)),
+                            ],
+                          ),
+                          Slider(
+                            min: 0,
+                            max: 1200,
+                            divisions: 120,
+                            value: speed,
+                            onChanged: (v) {
+                              setModalState(() => speed = v);
+                              syncApply();
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Altitude (m)'),
+                              Text(alt.toStringAsFixed(0)),
+                            ],
+                          ),
+                          Slider(
+                            min: 0,
+                            max: 12000,
+                            divisions: 120,
+                            value: alt,
+                            onChanged: (v) {
+                              setModalState(() => alt = v);
+                              syncApply();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Done'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _startStatusRefresh() {
+    _statusRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) {
+        setState(() {
+          // Update network and battery status
+          _updateSystemStatus();
+        });
+      }
+    });
+  }
+
+  void _updateSystemStatus() {
+    // Update battery level and network status
+    // In a real implementation, would use battery_plus package
+    // For now, keeping static values updated by refresh
   }
 
   Future<void> _loadPrefs() async {
@@ -80,11 +237,20 @@ class _SettingsPageState extends State<SettingsPage> {
         _communityAlertsEnabled =
             prefs.getBool('community_alerts_enabled') ??
             _serviceManager.hazardService.communityAlertsEnabled;
+        _medicalRemindersEnabled =
+            prefs.getBool('medical_reminders_enabled') ?? true;
+        _healthMonitoringEnabled =
+            prefs.getBool('health_monitoring_enabled') ?? false;
+        _snoringDetectionEnabled =
+            prefs.getBool('snoring_detection_enabled') ?? false;
       });
 
       // Apply to live sensor service
       _applyDetectionToggles();
       _applySensitivityToSensorService();
+      debugPrint(
+        '[SafetyFlags] crash=$_crashDetectionEnabled fall=$_fallDetectionEnabled location=$_locationServicesEnabled hazard=$_hazardAlertsEnabled weather=$_weatherAlertsEnabled community=$_communityAlertsEnabled',
+      );
     } catch (_) {}
   }
 
@@ -104,6 +270,9 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() {
         _locationServicesEnabled = hasPermission && serviceEnabled;
       });
+      debugPrint(
+        '[LocationStatus] permission=$hasPermission service=$serviceEnabled enabled=$_locationServicesEnabled',
+      );
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -151,22 +320,6 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // System Health Status
-            Text(
-              'System Health',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                color: AppTheme.primaryText,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            const SystemHealthCard(),
-
-            const SizedBox(height: 16),
-
-            // (Removed) Comprehensive Test Card — ACFD test UI disabled
-
             // Test Mode v2.0
             Text(
               'Test Mode v2.0 (Developer Tools)',
@@ -193,7 +346,6 @@ class _SettingsPageState extends State<SettingsPage> {
                         if (val) {
                           TestingMode.activate(
                             suppressDialogs: false,
-                            aiBypass: false,
                           );
                         } else {
                           TestingMode.deactivate();
@@ -263,16 +415,9 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: 24),
 
-            // Detailed Status Indicators
-            StatusIndicator(
-              crashDetectionEnabled: _crashDetectionEnabled,
-              fallDetectionEnabled: _fallDetectionEnabled,
-              locationServicesEnabled: _locationServicesEnabled,
-              batteryLevel: _batteryLevel,
-              networkStatus: _networkStatus,
-            ),
+            // Status indicators moved to unified card above
 
-            const SizedBox(height: 16),
+            // const SizedBox(height: 16),
 
             // Emergency Information
             Text(
@@ -290,119 +435,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
             // Privacy & Security
             const PrivacyDashboardCard(),
-
-            const SizedBox(height: 32),
-
-            // Phone AI Section
-            Text(
-              'Phone AI Features',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                color: AppTheme.primaryText,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              margin: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Colors.purple, Colors.blue],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(Icons.psychology, color: Colors.white),
-                    ),
-                    title: const Text(
-                      'AI Tutorial',
-                      style: TextStyle(
-                        color: AppTheme.primaryText,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    subtitle: const Text(
-                      'Learn how to use voice commands and AI features',
-                      style: TextStyle(color: AppTheme.secondaryText),
-                    ),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () {
-                      context.push(AppRouter.aiOnboarding);
-                    },
-                  ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.restart_alt,
-                        color: Colors.orange.shade700,
-                      ),
-                    ),
-                    title: const Text(
-                      'Reset AI Permission',
-                      style: TextStyle(
-                        color: AppTheme.primaryText,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    subtitle: const Text(
-                      'See the AI permission screen again',
-                      style: TextStyle(color: AppTheme.secondaryText),
-                    ),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () async {
-                      // Reset the AI permission preference
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('has_seen_ai_permission', false);
-
-                      if (!context.mounted) return;
-
-                      // Show the AI permission dialog
-                      showDialog(
-                        context: context,
-                        barrierDismissible: false,
-                        builder: (dialogContext) => AIPermissionRequest(
-                          onPermissionGranted: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            await prefs.setBool('has_seen_ai_permission', true);
-                            if (!dialogContext.mounted) return;
-                            Navigator.pop(dialogContext);
-                            // Navigate to AI onboarding tutorial
-                            if (context.mounted) {
-                              context.push(AppRouter.aiOnboarding);
-                            }
-                          },
-                          onPermissionDenied: () async {
-                            final prefs = await SharedPreferences.getInstance();
-                            await prefs.setBool('has_seen_ai_permission', true);
-                            if (!dialogContext.mounted) return;
-                            Navigator.pop(dialogContext);
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'AI features will remain disabled',
-                                  ),
-                                  duration: Duration(seconds: 2),
-                                ),
-                              );
-                            }
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
 
             const SizedBox(height: 32),
 
@@ -554,25 +586,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       });
                     },
                   ),
-                  const Divider(height: 1),
-                  ListTile(
-                    title: const Text(
-                      'Data & Privacy',
-                      style: TextStyle(color: AppTheme.primaryText),
-                    ),
-                    subtitle: const Text(
-                      'Manage your data and privacy settings',
-                      style: TextStyle(color: AppTheme.secondaryText),
-                    ),
-                    trailing: const Icon(
-                      Icons.arrow_forward_ios,
-                      color: AppTheme.neutralGray,
-                      size: 16,
-                    ),
-                    onTap: () {
-                      // Navigate to privacy settings
-                    },
-                  ),
                 ],
               ),
             ),
@@ -592,6 +605,101 @@ class _SettingsPageState extends State<SettingsPage> {
             Card(
               child: Column(
                 children: [
+                  SwitchListTile(
+                    title: const Text(
+                      'Medication Reminders',
+                      style: TextStyle(color: AppTheme.primaryText),
+                    ),
+                    subtitle: const Text(
+                      'Daily notifications for your medications',
+                      style: TextStyle(color: AppTheme.secondaryText),
+                    ),
+                    value: _medicalRemindersEnabled,
+                    onChanged: (value) async {
+                      setState(() {
+                        _medicalRemindersEnabled = value;
+                      });
+                      try {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('medical_reminders_enabled', value);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                value
+                                    ? 'Medication reminders enabled'
+                                    : 'Medication reminders disabled',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      } catch (_) {}
+                    },
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text(
+                      'Health Monitoring',
+                      style: TextStyle(color: AppTheme.primaryText),
+                    ),
+                    subtitle: const Text(
+                      'Track heart rate, steps, and sleep score (opt-in)',
+                      style: TextStyle(color: AppTheme.secondaryText),
+                    ),
+                    value: _healthMonitoringEnabled,
+                    onChanged: (value) async {
+                      setState(() {
+                        _healthMonitoringEnabled = value;
+                      });
+                      try {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('health_monitoring_enabled', value);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              value
+                                  ? 'Health monitoring enabled'
+                                  : 'Health monitoring disabled',
+                            ),
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      } catch (_) {}
+                    },
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text(
+                      'Snoring Detection',
+                      style: TextStyle(color: AppTheme.primaryText),
+                    ),
+                    subtitle: const Text(
+                      'Local-only nightly snoring summary (no recordings saved)',
+                      style: TextStyle(color: AppTheme.secondaryText),
+                    ),
+                    value: _snoringDetectionEnabled,
+                    onChanged: (value) async {
+                      setState(() {
+                        _snoringDetectionEnabled = value;
+                      });
+                      try {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('snoring_detection_enabled', value);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              value
+                                  ? 'Snoring detection enabled'
+                                  : 'Snoring detection disabled',
+                            ),
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      } catch (_) {}
+                    },
+                  ),
+                  const Divider(height: 1),
                   SwitchListTile(
                     title: const Text(
                       'Hazard Alerts',
@@ -745,28 +853,59 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 24),
 
             // Developer Tools
-            Card(
-              child: ListTile(
-                leading: const Icon(
-                  Icons.message_outlined,
-                  color: AppTheme.warningOrange,
+            if (kDebugMode) ...[
+              Card(
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(
+                        Icons.flight_takeoff,
+                        color: AppTheme.infoBlue,
+                      ),
+                      title: const Text(
+                        'Flight Simulation (Dev)',
+                        style: TextStyle(color: AppTheme.primaryText),
+                      ),
+                      subtitle: Text(
+                        _devSimFlight
+                            ? 'Enabled • ${_devSimSpeedKmh.toStringAsFixed(0)} km/h • ${_devSimAltitudeM.toStringAsFixed(0)} m'
+                            : 'Disabled',
+                        style: const TextStyle(color: AppTheme.secondaryText),
+                      ),
+                      trailing: Switch(
+                        value: _devSimFlight,
+                        onChanged: (v) {
+                          setState(() => _devSimFlight = v);
+                          _applyDevFlightOverride(enabled: v);
+                        },
+                      ),
+                      onTap: _openDevFlightSimulator,
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(
+                        Icons.message_outlined,
+                        color: AppTheme.warningOrange,
+                      ),
+                      title: const Text(
+                        'Cross Messaging Test',
+                        style: TextStyle(color: AppTheme.primaryText),
+                      ),
+                      subtitle: const Text(
+                        'Test cross messaging policies (Development)',
+                        style: TextStyle(color: AppTheme.secondaryText),
+                      ),
+                      trailing: const Icon(
+                        Icons.arrow_forward_ios,
+                        color: AppTheme.neutralGray,
+                        size: 16,
+                      ),
+                      onTap: () => context.go('/settings/cross-messaging-test'),
+                    ),
+                  ],
                 ),
-                title: const Text(
-                  'Cross Messaging Test',
-                  style: TextStyle(color: AppTheme.primaryText),
-                ),
-                subtitle: const Text(
-                  'Test cross messaging policies (Development)',
-                  style: TextStyle(color: AppTheme.secondaryText),
-                ),
-                trailing: const Icon(
-                  Icons.arrow_forward_ios,
-                  color: AppTheme.neutralGray,
-                  size: 16,
-                ),
-                onTap: () => context.go('/settings/cross-messaging-test'),
               ),
-            ),
+            ],
 
             const SizedBox(height: 24),
 
@@ -966,7 +1105,6 @@ class _DevSecurityActions extends StatelessWidget {
               expiredCutoff: DateTime.now().subtract(
                 const Duration(minutes: 10),
               ),
-
             );
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(

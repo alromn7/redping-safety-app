@@ -27,15 +27,6 @@ enum EmergencyEventType {
   smsSendFailed,
   smsBulkComplete,
 
-  // AI Events
-  aiMonitoringStarted,
-  aiMonitoringStopped,
-  aiVerificationAttempt,
-  aiUserResponsive,
-  aiUserUnresponsive,
-  aiEmergencyCallInitiated,
-  aiDecisionMade,
-
   // SAR Events
   sarTeamAssigned,
   sarTeamEnRoute,
@@ -233,51 +224,6 @@ class EmergencyEventBus {
         message: 'SMS failed to $phoneNumber',
         error: error,
         data: {'phoneNumber': phoneNumber},
-      ),
-    );
-  }
-
-  void fireAIMonitoringStarted(String sessionId, String monitoringReason) {
-    fire(
-      EmergencyEvent(
-        type: EmergencyEventType.aiMonitoringStarted,
-        sessionId: sessionId,
-        timestamp: DateTime.now(),
-        message: 'AI monitoring started: $monitoringReason',
-        data: {'reason': monitoringReason},
-      ),
-    );
-  }
-
-  void fireAIVerificationAttempt(
-    String sessionId,
-    int attemptNumber,
-    bool responsive,
-  ) {
-    fire(
-      EmergencyEvent(
-        type: EmergencyEventType.aiVerificationAttempt,
-        sessionId: sessionId,
-        timestamp: DateTime.now(),
-        message:
-            'AI verification attempt #$attemptNumber: ${responsive ? "Responsive" : "No response"}',
-        data: {'attemptNumber': attemptNumber, 'responsive': responsive},
-      ),
-    );
-  }
-
-  void fireAIEmergencyCallInitiated(
-    String sessionId,
-    String targetNumber,
-    String reason,
-  ) {
-    fire(
-      EmergencyEvent(
-        type: EmergencyEventType.aiEmergencyCallInitiated,
-        sessionId: sessionId,
-        timestamp: DateTime.now(),
-        message: 'AI initiating emergency call to $targetNumber: $reason',
-        data: {'targetNumber': targetNumber, 'reason': reason},
       ),
     );
   }

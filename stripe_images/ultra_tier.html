@@ -47,7 +47,7 @@
             justify-content: center;
             font-size: 42px;
             margin-right: 20px;
-            background: linear-gradient(135deg, #1565C0, #0D47A1);
+            background: linear-gradient(135deg, #E91E63, #F06292);
         }
         
         .product-title-section {
@@ -67,27 +67,44 @@
             color: #E53935;
         }
         
-        .product-tagline {
-            font-size: 16px;
+        .yearly-price {
+            font-size: 13px;
             color: #666;
-            margin-bottom: 20px;
-            line-height: 1.5;
+            margin-top: 3px;
+        }
+        
+        .savings-badge {
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 6px;
+        }
+        
+        .product-tagline {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 12px;
+            line-height: 1.4;
             font-style: italic;
         }
         
         .features-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-            margin-bottom: 20px;
+            gap: 8px;
+            margin-bottom: 12px;
         }
         
         .feature-item {
             display: flex;
             align-items: flex-start;
-            font-size: 14px;
+            font-size: 12px;
             color: #424242;
-            line-height: 1.4;
+            line-height: 1.3;
         }
         
         .feature-item::before {
@@ -101,11 +118,11 @@
         
         .perfect-for {
             background: #f5f5f5;
-            padding: 14px 16px;
-            border-radius: 8px;
-            font-size: 14px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-size: 12px;
             color: #555;
-            line-height: 1.5;
+            line-height: 1.4;
         }
         
         .perfect-for strong {
@@ -116,27 +133,28 @@
 <body>
     <div class="product-card">
         <div class="product-header">
-            <div class="product-icon">🏢</div>
+            <div class="product-icon">💎</div>
             <div class="product-title-section">
                 <div class="product-name">REDPING Ultra</div>
                 <div class="product-price">$29.99/month + $5/member</div>
+                <div class="yearly-price">$299.99/year + $5/member/month <span class="savings-badge">Save $59.89</span></div>
             </div>
         </div>
         <div class="product-tagline">
-            Enterprise-grade SAR organization management with unlimited team members and full administrative control.
+            Enterprise-level safety management with SAR dashboard, multi-member control, and organization-wide monitoring.
         </div>
         <div class="features-grid">
-            <div class="feature-item">SAR Admin Management</div>
-            <div class="feature-item">Unlimited Team Members ($5 each)</div>
-            <div class="feature-item">Team Creation & Management</div>
-            <div class="feature-item">Multi-Organization Dashboard</div>
-            <div class="feature-item">Enterprise Analytics & Reports</div>
-            <div class="feature-item">Unlimited Satellite Messages</div>
-            <div class="feature-item">Emergency Broadcast System</div>
-            <div class="feature-item">Everything in Pro + API Access</div>
+            <div class="feature-item">Full SAR Dashboard Access</div>
+            <div class="feature-item">Multi-Member Management</div>
+            <div class="feature-item">Organization Controls</div>
+            <div class="feature-item">Advanced Reporting & Analytics</div>
+            <div class="feature-item">API Access</div>
+            <div class="feature-item">Dedicated Account Manager</div>
+            <div class="feature-item">Custom Safety Zones</div>
+            <div class="feature-item">Everything in Pro</div>
         </div>
         <div class="perfect-for">
-            <strong>Perfect for:</strong> SAR organizations, emergency services, rescue agencies, and large safety teams. Example: 1 admin + 10 members = $79.99/month
+            <strong>Perfect for:</strong> SAR organizations, emergency services, security teams, enterprise safety managers, and large organizations.
         </div>
     </div>
 </body>

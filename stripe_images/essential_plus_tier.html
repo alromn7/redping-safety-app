@@ -67,27 +67,44 @@
             color: #E53935;
         }
         
-        .product-tagline {
-            font-size: 16px;
+        .yearly-price {
+            font-size: 13px;
             color: #666;
-            margin-bottom: 20px;
-            line-height: 1.5;
+            margin-top: 3px;
+        }
+        
+        .savings-badge {
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 6px;
+        }
+        
+        .product-tagline {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 12px;
+            line-height: 1.4;
             font-style: italic;
         }
         
         .features-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-            margin-bottom: 20px;
+            gap: 8px;
+            margin-bottom: 12px;
         }
         
         .feature-item {
             display: flex;
             align-items: flex-start;
-            font-size: 14px;
+            font-size: 12px;
             color: #424242;
-            line-height: 1.4;
+            line-height: 1.3;
         }
         
         .feature-item::before {
@@ -101,11 +118,11 @@
         
         .perfect-for {
             background: #f5f5f5;
-            padding: 14px 16px;
-            border-radius: 8px;
-            font-size: 14px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-size: 12px;
             color: #555;
-            line-height: 1.5;
+            line-height: 1.4;
         }
         
         .perfect-for strong {
@@ -116,27 +133,28 @@
 <body>
     <div class="product-card">
         <div class="product-header">
-            <div class="product-icon">🛡️</div>
+            <div class="product-icon">⭐</div>
             <div class="product-title-section">
                 <div class="product-name">REDPING Essential+</div>
                 <div class="product-price">$4.99/month</div>
+                <div class="yearly-price">$49.99/year <span class="savings-badge">Save $9.89</span></div>
             </div>
         </div>
         <div class="product-tagline">
-            Automatic crash & fall detection with medical profiles and hazard alerts for complete safety protection.
+            Enhanced safety features with AI assistant, hazard alerts, and unlimited emergency contacts.
         </div>
         <div class="features-grid">
-            <div class="feature-item">Auto Crash Detection (60+ km/h)</div>
-            <div class="feature-item">Auto Fall Detection with AI</div>
-            <div class="feature-item">Medical Profile Storage</div>
-            <div class="feature-item">Hazard & Weather Alerts</div>
-            <div class="feature-item">SOS SMS to 5 Contacts</div>
+            <div class="feature-item">Advanced SOS with Audio</div>
+            <div class="feature-item">24/7 AI Safety Assistant</div>
+            <div class="feature-item">Hazard Alerts & Mapping</div>
+            <div class="feature-item">Unlimited Emergency Contacts</div>
             <div class="feature-item">Enhanced Location Sharing</div>
-            <div class="feature-item">Community Chat Access</div>
-            <div class="feature-item">RedPing 1-Tap Help</div>
+            <div class="feature-item">Priority Support</div>
+            <div class="feature-item">Auto Crash Detection</div>
+            <div class="feature-item">Everything in Free</div>
         </div>
         <div class="perfect-for">
-            <strong>Perfect for:</strong> Safety-conscious users, elderly care, daily commuters, and anyone wanting automatic emergency detection.
+            <strong>Perfect for:</strong> Safety-conscious individuals, daily commuters, elderly care, and anyone wanting reliable emergency protection.
         </div>
     </div>
 </body>

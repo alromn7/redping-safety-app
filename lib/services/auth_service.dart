@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../security/secure_storage_service.dart';
 import '../models/auth_user.dart';
 import '../core/logging/app_logger.dart';
@@ -27,11 +30,38 @@ class AuthService {
   void Function(AuthUser user)? _onUserSignedIn;
   void Function()? _onUserSignedOut;
 
+  // Test-only mode: bypass FirebaseAuth calls in unit tests.
+  bool _useInMemoryAuth = false;
+  AuthUser Function({required String email, String? displayName})?
+  _inMemoryUserFactory;
+
+  /// Enable in-memory auth for tests where Firebase isn't available.
+  ///
+  /// This is intended for `flutter test` only and should not be used in
+  /// production flows.
+  void enableInMemoryAuthMock({
+    AuthUser Function({required String email, String? displayName})? userFactory,
+  }) {
+    if (kReleaseMode) return;
+    _useInMemoryAuth = true;
+    _inMemoryUserFactory = userFactory;
+  }
+
   // Storage keys
   static const String _userKey = 'auth_user';
   static const String _tokenKey = 'auth_token';
   static const String _rememberMeKey = 'remember_me';
   static const String _savedEmailKey = 'saved_email';
+
+  // Login bypass tracking keys
+  static const String _loginCountKey = 'login_success_count';
+  static const String _lastLoginTimestampKey = 'last_login_timestamp';
+  static const String _firstLoginTimestampKey = 'first_login_timestamp';
+  static const String _deviceIdKey = 'device_id';
+
+  // Login bypass constants
+  static const int _requiredLoginsForBypass = 3;
+  static const int _weeklyReauthDays = 7;
 
   /// Initialize the authentication service
   Future<void> initialize() async {
@@ -79,6 +109,37 @@ class AuthService {
         _status = AuthStatus.unauthenticated;
       }
 
+      // If we didn't restore from local storage, but FirebaseAuth already has
+      // a persisted session (anonymous or non-anonymous), mirror it so the
+      // rest of the app can rely on AuthService.currentUser.id.
+      if (_status != AuthStatus.authenticated && !_useInMemoryAuth) {
+        try {
+          final fbUser = firebase_auth.FirebaseAuth.instance.currentUser;
+          if (fbUser != null) {
+            final user = _createAuthUserFromFirebase(fbUser);
+            _currentUser = user;
+            _status = AuthStatus.authenticated;
+            _userController.add(_currentUser);
+            debugPrint(
+              'AuthService: Mirrored FirebaseAuth session - ${user.id} (anonymous: ${fbUser.isAnonymous})',
+            );
+
+            // Persist mirrored user locally so other app flows remain stable
+            // across restarts (token is app-local, not a Firebase token).
+            try {
+              await _saveUser(user, _generateToken());
+            } catch (_) {}
+
+            // Crashlytics / logging correlation (best-effort)
+            try {
+              await AppLogger.setUserId(user.id);
+            } catch (_) {}
+          }
+        } catch (e) {
+          debugPrint('AuthService: FirebaseAuth mirror skipped - $e');
+        }
+      }
+
       _statusController.add(_status);
       debugPrint('AuthService: Initialized successfully');
     } catch (e) {
@@ -96,17 +157,55 @@ class AuthService {
       _status = AuthStatus.loading;
       _statusController.add(_status);
 
-      // Simulate API call delay
-      await Future.delayed(const Duration(seconds: 1));
+      if (_useInMemoryAuth) {
+        final user =
+            _inMemoryUserFactory?.call(email: request.email) ??
+            AuthUser(
+              id: 'test_${request.email.hashCode}',
+              email: request.email,
+              displayName: request.email.split('@').first,
+              phoneNumber: '',
+              photoUrl: '',
+              isEmailVerified: true,
+              createdAt: DateTime.now(),
+              lastSignIn: DateTime.now(),
+            );
 
-      // Mock authentication (replace with real API call)
-      final user = await _mockSignIn(request);
+        await _saveUser(user, _generateToken());
+        await _handleRememberMe(request);
+        await _trackSuccessfulLogin();
+
+        _currentUser = user;
+        _status = AuthStatus.authenticated;
+        _userController.add(_currentUser);
+        _statusController.add(_status);
+        _onUserSignedIn?.call(user);
+        debugPrint('AuthService: In-memory sign in success - ${user.email}');
+        return user;
+      }
+
+      // Sign in with Firebase Authentication
+      final firebaseAuth = firebase_auth.FirebaseAuth.instance;
+      final userCredential = await firebaseAuth.signInWithEmailAndPassword(
+        email: request.email,
+        password: request.password,
+      );
+
+      if (userCredential.user == null) {
+        throw Exception('Sign in failed - no user returned');
+      }
+
+      // Create AuthUser from Firebase user
+      final user = _createAuthUserFromFirebase(userCredential.user!);
 
       // Save user to storage
       await _saveUser(user, _generateToken());
 
       // Handle remember me functionality
       await _handleRememberMe(request);
+
+      // Track successful login for bypass logic
+      await _trackSuccessfulLogin();
 
       _currentUser = user;
       _status = AuthStatus.authenticated;
@@ -141,14 +240,76 @@ class AuthService {
       _status = AuthStatus.loading;
       _statusController.add(_status);
 
-      // Simulate API call delay
-      await Future.delayed(const Duration(seconds: 2));
+      if (_useInMemoryAuth) {
+        final user =
+            _inMemoryUserFactory?.call(
+              email: request.email,
+              displayName: request.displayName,
+            ) ??
+            AuthUser(
+              id: 'test_${request.email.hashCode}',
+              email: request.email,
+              displayName: request.displayName,
+              phoneNumber: '',
+              photoUrl: '',
+              isEmailVerified: true,
+              createdAt: DateTime.now(),
+              lastSignIn: DateTime.now(),
+            );
 
-      // Mock user creation (replace with real API call)
-      final user = await _mockSignUp(request);
+        await _saveUser(user, _generateToken());
+        await _trackSuccessfulLogin();
+
+        _currentUser = user;
+        _status = AuthStatus.authenticated;
+        _userController.add(_currentUser);
+        _statusController.add(_status);
+        _onUserSignedIn?.call(user);
+        debugPrint('AuthService: In-memory signup success - ${user.email}');
+        return user;
+      }
+
+      // Create user with Firebase Authentication
+      final firebaseAuth = firebase_auth.FirebaseAuth.instance;
+      final userCredential = await firebaseAuth.createUserWithEmailAndPassword(
+        email: request.email,
+        password: request.password,
+      );
+
+      if (userCredential.user == null) {
+        throw Exception('Sign up failed - no user returned');
+      }
+
+      // Update Firebase user display name
+      await userCredential.user!.updateDisplayName(request.displayName);
+
+      // Send Firebase verification email (built-in)
+      debugPrint('AuthService: Sending verification email to ${request.email}');
+      try {
+        await userCredential.user!.sendEmailVerification();
+        debugPrint(
+          'AuthService: ✅ Verification email sent successfully to ${request.email}',
+        );
+        debugPrint('AuthService: Email should arrive within 1-5 minutes');
+        debugPrint('AuthService: Check spam folder if not received');
+      } catch (e) {
+        debugPrint('AuthService: ❌ FAILED to send verification email - $e');
+        debugPrint('AuthService: Error type: ${e.runtimeType}');
+        if (e is firebase_auth.FirebaseAuthException) {
+          debugPrint('AuthService: Firebase error code: ${e.code}');
+          debugPrint('AuthService: Firebase error message: ${e.message}');
+        }
+        // Don't fail signup if email fails, but log it clearly
+      }
+
+      // Create AuthUser from Firebase user
+      final user = _createAuthUserFromFirebase(userCredential.user!);
 
       // Save user to storage
       await _saveUser(user, _generateToken());
+
+      // Track successful signup as first login
+      await _trackSuccessfulLogin();
 
       _currentUser = user;
       _status = AuthStatus.authenticated;
@@ -175,13 +336,110 @@ class AuthService {
     }
   }
 
-  /// Sign out current user
+  /// Check if current user's email is verified
+  bool get isEmailVerified {
+    final firebaseUser = firebase_auth.FirebaseAuth.instance.currentUser;
+    return firebaseUser?.emailVerified ?? false;
+  }
+
+  /// Delete current user account permanently
+  Future<void> deleteAccount() async {
+    try {
+      final firebaseUser = firebase_auth.FirebaseAuth.instance.currentUser;
+      if (firebaseUser == null) {
+        throw const AuthException('No user signed in');
+      }
+
+      final email = firebaseUser.email;
+      debugPrint('AuthService: Deleting account for $email');
+
+      // Delete Firebase Auth account
+      await firebaseUser.delete();
+
+      // Clear local storage
+      await _clearStoredUser();
+
+      // Reset state
+      _currentUser = AuthUser.empty;
+      _status = AuthStatus.unauthenticated;
+      _userController.add(_currentUser);
+      _statusController.add(_status);
+
+      debugPrint('AuthService: Account deleted successfully - $email');
+    } on firebase_auth.FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') {
+        throw const AuthException(
+          'Please sign in again before deleting your account',
+        );
+      }
+      debugPrint('AuthService: Failed to delete account - ${e.message}');
+      rethrow;
+    } catch (e) {
+      debugPrint('AuthService: Failed to delete account - $e');
+      rethrow;
+    }
+  }
+
+  /// Resend verification email to current user
+  Future<void> resendVerificationEmail() async {
+    try {
+      final firebaseUser = firebase_auth.FirebaseAuth.instance.currentUser;
+      if (firebaseUser == null) {
+        throw const AuthException('No user signed in');
+      }
+
+      if (firebaseUser.emailVerified) {
+        throw const AuthException('Email is already verified');
+      }
+
+      await firebaseUser.sendEmailVerification();
+      debugPrint(
+        'AuthService: Verification email resent to ${firebaseUser.email}',
+      );
+    } catch (e) {
+      debugPrint('AuthService: Failed to resend verification email - $e');
+      rethrow;
+    }
+  }
+
+  /// Reload current user to check email verification status
+  Future<void> reloadUser() async {
+    try {
+      final firebaseUser = firebase_auth.FirebaseAuth.instance.currentUser;
+      if (firebaseUser != null) {
+        await firebaseUser.reload();
+        final updatedUser = firebase_auth.FirebaseAuth.instance.currentUser;
+        if (updatedUser != null) {
+          _currentUser = _createAuthUserFromFirebase(updatedUser);
+          _userController.add(_currentUser);
+          debugPrint(
+            'AuthService: User reloaded - emailVerified: ${updatedUser.emailVerified}',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('AuthService: Failed to reload user - $e');
+      rethrow;
+    }
+  }
+
+  /// Sign out the current user
   Future<void> signOut() async {
     debugPrint('AuthService: Signing out user');
+
+    // Sign out from Firebase
+    try {
+      await firebase_auth.FirebaseAuth.instance.signOut();
+    } catch (e) {
+      debugPrint('AuthService: Firebase sign out error - $e');
+    }
 
     try {
       // Clear stored user data
       await _clearStoredUser();
+
+      // Reset login tracking when user signs out
+      await _resetLoginTracking();
 
       _currentUser = AuthUser.empty;
       _status = AuthStatus.unauthenticated;
@@ -210,11 +468,10 @@ class AuthService {
     debugPrint('AuthService: Sending password reset email to ${request.email}');
 
     try {
-      // Simulate API call delay
-      await Future.delayed(const Duration(seconds: 1));
-
-      // Mock password reset (replace with real API call)
-      await _mockPasswordReset(request);
+      // Send password reset email via Firebase
+      await firebase_auth.FirebaseAuth.instance.sendPasswordResetEmail(
+        email: request.email,
+      );
 
       debugPrint('AuthService: Password reset email sent successfully');
     } catch (e) {
@@ -276,62 +533,162 @@ class AuthService {
     return prefs.getBool(_rememberMeKey) ?? false;
   }
 
-  /// Mock sign in implementation
-  Future<AuthUser> _mockSignIn(LoginRequest request) async {
-    // Mock validation
-    if (request.email.isEmpty || request.password.isEmpty) {
-      throw const AuthException('Email and password are required');
+  /// Get or create device ID for this phone
+  Future<String> _getDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? deviceId = prefs.getString(_deviceIdKey);
+
+    if (deviceId == null) {
+      // Generate device ID from device info
+      try {
+        final deviceInfo = DeviceInfoPlugin();
+        if (Platform.isAndroid) {
+          final androidInfo = await deviceInfo.androidInfo;
+          deviceId = androidInfo.id;
+        } else if (Platform.isIOS) {
+          final iosInfo = await deviceInfo.iosInfo;
+          deviceId =
+              iosInfo.identifierForVendor ??
+              'ios_${DateTime.now().millisecondsSinceEpoch}';
+        } else {
+          deviceId = 'device_${DateTime.now().millisecondsSinceEpoch}';
+        }
+        await prefs.setString(_deviceIdKey, deviceId);
+        debugPrint('AuthService: Device ID created - $deviceId');
+      } catch (e) {
+        // Fallback to timestamp-based ID
+        deviceId = 'device_${DateTime.now().millisecondsSinceEpoch}';
+        await prefs.setString(_deviceIdKey, deviceId);
+        debugPrint('AuthService: Device ID created (fallback) - $deviceId');
+      }
     }
 
-    if (!request.email.contains('@')) {
-      throw const AuthException('Invalid email format');
+    return deviceId;
+  }
+
+  /// Track successful login
+  Future<void> _trackSuccessfulLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // Ensure device ID is set
+    await _getDeviceId();
+
+    // Increment login count
+    int currentCount = prefs.getInt(_loginCountKey) ?? 0;
+    currentCount++;
+    await prefs.setInt(_loginCountKey, currentCount);
+
+    // Update timestamp
+    final now = DateTime.now().toIso8601String();
+    await prefs.setString(_lastLoginTimestampKey, now);
+
+    // Set first login timestamp if not already set
+    if (!prefs.containsKey(_firstLoginTimestampKey)) {
+      await prefs.setString(_firstLoginTimestampKey, now);
+      debugPrint('AuthService: First login tracked at $now');
     }
 
-    if (request.password.length < 6) {
-      throw const AuthException('Password must be at least 6 characters');
-    }
-
-    // Mock user data (replace with real API response)
-    return AuthUser(
-      id: 'user_${DateTime.now().millisecondsSinceEpoch}',
-      email: request.email,
-      displayName: request.email.split('@')[0],
-      isEmailVerified: true,
-      createdAt: DateTime.now(),
-      lastSignIn: DateTime.now(),
+    debugPrint(
+      'AuthService: Login tracked - Count: $currentCount, Timestamp: $now',
     );
   }
 
-  /// Mock sign up implementation
-  Future<AuthUser> _mockSignUp(SignupRequest request) async {
-    // Mock validation
-    if (request.email.isEmpty ||
-        request.password.isEmpty ||
-        request.displayName.isEmpty) {
-      throw const AuthException('All fields are required');
-    }
+  /// Check if user should bypass login screen
+  Future<bool> shouldBypassLogin() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-    if (!request.email.contains('@')) {
-      throw const AuthException('Invalid email format');
-    }
+      // Check login count - user must have logged in successfully 3+ times
+      final loginCount = prefs.getInt(_loginCountKey) ?? 0;
+      if (loginCount < _requiredLoginsForBypass) {
+        debugPrint(
+          'AuthService: Bypass rejected - Only $loginCount logins (need $_requiredLoginsForBypass)',
+        );
+        return false;
+      }
 
-    if (request.password.length < 6) {
-      throw const AuthException('Password must be at least 6 characters');
-    }
+      // Check device ID matches (must be same device)
+      final deviceId = await _getDeviceId();
+      final storedDeviceId = prefs.getString(_deviceIdKey);
+      if (deviceId != storedDeviceId) {
+        debugPrint('AuthService: Bypass rejected - Device mismatch');
+        return false;
+      }
 
-    if (request.displayName.length < 2) {
-      throw const AuthException('Display name must be at least 2 characters');
-    }
+      // Check if saved user exists (must have logged in before)
+      final userJson = prefs.getString(_userKey);
+      if (userJson == null) {
+        debugPrint('AuthService: Bypass rejected - No saved user found');
+        return false;
+      }
 
-    // Mock user data (replace with real API response)
+      // Check weekly re-auth requirement
+      final lastLoginStr = prefs.getString(_lastLoginTimestampKey);
+      if (lastLoginStr != null) {
+        final lastLogin = DateTime.parse(lastLoginStr);
+        final daysSinceLogin = DateTime.now().difference(lastLogin).inDays;
+
+        if (daysSinceLogin >= _weeklyReauthDays) {
+          debugPrint(
+            'AuthService: Bypass rejected - $daysSinceLogin days since last login (weekly re-auth required)',
+          );
+          return false;
+        }
+
+        debugPrint(
+          'AuthService: Bypass approved - $loginCount logins, $daysSinceLogin days since last login',
+        );
+
+        // Restore user session from saved data for offline use
+        try {
+          final userData = jsonDecode(userJson) as Map<String, dynamic>;
+          _currentUser = AuthUser.fromJson(userData);
+          _status = AuthStatus.authenticated;
+          _userController.add(_currentUser);
+          _statusController.add(_status);
+          debugPrint(
+            'AuthService: User session restored for offline bypass - ${_currentUser.email}',
+          );
+        } catch (e) {
+          debugPrint('AuthService: Failed to restore user for bypass - $e');
+          return false;
+        }
+
+        return true;
+      }
+
+      debugPrint('AuthService: Bypass rejected - No login timestamp found');
+      return false;
+    } catch (e) {
+      debugPrint('AuthService: Error checking bypass eligibility - $e');
+      return false;
+    }
+  }
+
+  /// Reset login tracking (for testing or on logout)
+  Future<void> _resetLoginTracking() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_loginCountKey);
+    await prefs.remove(_lastLoginTimestampKey);
+    await prefs.remove(_firstLoginTimestampKey);
+    // Keep device ID to maintain device identity
+    debugPrint('AuthService: Login tracking reset');
+  }
+
+  /// Create AuthUser from Firebase user
+  AuthUser _createAuthUserFromFirebase(firebase_auth.User firebaseUser) {
     return AuthUser(
-      id: 'user_${DateTime.now().millisecondsSinceEpoch}',
-      email: request.email,
-      displayName: request.displayName,
-      phoneNumber: request.phoneNumber,
-      isEmailVerified: false,
-      createdAt: DateTime.now(),
-      lastSignIn: DateTime.now(),
+      id: firebaseUser.uid,
+      email: firebaseUser.email ?? '',
+      displayName:
+          firebaseUser.displayName ??
+          firebaseUser.email?.split('@')[0] ??
+          'User',
+      photoUrl: firebaseUser.photoURL,
+      phoneNumber: firebaseUser.phoneNumber,
+      isEmailVerified: firebaseUser.emailVerified,
+      createdAt: firebaseUser.metadata.creationTime,
+      lastSignIn: firebaseUser.metadata.lastSignInTime ?? DateTime.now(),
     );
   }
 
@@ -401,6 +758,9 @@ class AuthService {
       _status = AuthStatus.authenticated;
       _userController.add(_currentUser);
       _statusController.add(_status);
+
+      // Track successful external login
+      await _trackSuccessfulLogin();
 
       // Callback and logging
       _onUserSignedIn?.call(user);

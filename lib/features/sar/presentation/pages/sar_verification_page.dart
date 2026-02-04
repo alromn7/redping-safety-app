@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../models/sar_identity.dart';
 import '../../../../services/sar_identity_service.dart';
-import '../../../../services/feature_access_service.dart';
 
 /// Page for verifying SAR member registrations
 class SARVerificationPage extends StatefulWidget {
@@ -29,84 +28,8 @@ class _SARVerificationPageState extends State<SARVerificationPage>
   void initState() {
     super.initState();
 
-    // 🔒 SUBSCRIPTION GATE: SAR Admin requires Ultra subscription
-    final featureAccess = FeatureAccessService.instance;
-    if (!featureAccess.hasFeatureAccess('sarAdminAccess')) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _showUpgradeDialog();
-        Navigator.pop(context);
-      });
-      return;
-    }
-
     _tabController = TabController(length: 3, vsync: this);
     _loadMembers();
-  }
-
-  void _showUpgradeDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.lock, color: AppTheme.criticalRed),
-            SizedBox(width: 8),
-            Expanded(child: Text('Upgrade to Ultra')),
-          ],
-        ),
-        content: const SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'SAR Admin Management is available on Ultra plans only.',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-              ),
-              SizedBox(height: 12),
-              Text(
-                'Manage and verify SAR team members, coordinate operations, and oversee your organization.',
-                style: TextStyle(color: AppTheme.secondaryText),
-              ),
-              SizedBox(height: 16),
-              Text(
-                'What you\'ll get with Ultra:',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-              ),
-              SizedBox(height: 8),
-              Text('• Full SAR Admin Access'),
-              SizedBox(height: 6),
-              Text('• Verify SAR Member Registrations'),
-              SizedBox(height: 6),
-              Text('• Organization Management'),
-              SizedBox(height: 6),
-              Text('• Team Coordination Tools'),
-              SizedBox(height: 6),
-              Text('• Add Pro Members (+\$5/member)'),
-              SizedBox(height: 6),
-              Text('• All Pro Features Included'),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Navigate to subscription page
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.criticalRed,
-            ),
-            child: const Text('View Ultra Plan'),
-          ),
-        ],
-      ),
-    );
   }
 
   @override

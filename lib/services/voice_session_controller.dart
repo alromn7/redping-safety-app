@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../config/env.dart';
-import 'ai_assistant_service.dart';
 
 /// Local classification result with type & confidence for downstream logic/tests
 class LocalClassificationResult {
@@ -19,10 +18,6 @@ enum VoiceSessionState { idle, listening, processing, speaking }
 class VoiceSessionController {
   VoiceSessionState _state = VoiceSessionState.idle;
   VoiceSessionState get currentState => _state;
-
-  // Lazy-load AI service
-  AIAssistantService? _ai;
-  AIAssistantService get _aiService => _ai ??= AIAssistantService();
 
   // Cached regex patterns for performance
   static final _statusPattern = RegExp(
@@ -76,22 +71,13 @@ class VoiceSessionController {
     _transition(VoiceSessionState.processing);
 
     try {
-      // Process command with lazy-loaded AI service and timeout
-      final response = await _aiService
-          .processCommand(rawText)
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              debugPrint('[VOICE_SESSION] Processing timeout');
-              throw TimeoutException('Voice processing timeout');
-            },
-          );
+      // Cloud/LLM assistant removed: local-only classification remains.
+      final allowVoice = Env.flag<bool>('enableInAppVoice', false);
+      if (!allowVoice) return;
 
-      final allowVoice = Env.flag<bool>('enableInAppVoiceAI', false);
-      if (allowVoice && response.content.trim().isNotEmpty) {
-        _transition(VoiceSessionState.speaking);
-        await speak(response.content);
-      }
+      final classification = classifyLocally(rawText);
+      _transition(VoiceSessionState.speaking);
+      await speak('Voice command detected: ${classification.type}.');
     } catch (e) {
       debugPrint('[VOICE_SESSION] Error: $e');
     } finally {

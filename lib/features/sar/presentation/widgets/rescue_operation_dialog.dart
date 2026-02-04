@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../models/sos_ping.dart';
 import '../../../../models/sos_session.dart';
+import '../../../../services/auth_service.dart';
 import 'emergency_messaging_widget.dart';
 
 /// Dialog for rescue operation details and actions
@@ -437,10 +438,11 @@ class _RescueOperationDialogState extends State<RescueOperationDialog>
   }
 
   Widget _buildMessagingTab() {
+    final currentUser = AuthService.instance.currentUser;
     return EmergencyMessagingWidget(
       ping: widget.ping,
       isSARMember: true, // This dialog is for SAR members
-      currentUserId: 'demo_sar_member_001', // TODO: Get from current SAR member
+      currentUserId: currentUser.id,
     );
   }
 

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+
+import '../../../../core/app/app_launch_config.dart';
+import 'package:flutter_stripe/flutter_stripe.dart' as stripe;
 import '../../../../core/theme/app_theme.dart';
 import '../../../../models/subscription_tier.dart';
 import '../../../../models/subscription_plan.dart';
@@ -24,10 +26,6 @@ class PaymentPage extends StatefulWidget {
 
 class _PaymentPageState extends State<PaymentPage> {
   final _formKey = GlobalKey<FormState>();
-  final _cardNumberController = TextEditingController();
-  final _expMonthController = TextEditingController();
-  final _expYearController = TextEditingController();
-  final _cvcController = TextEditingController();
   final _nameController = TextEditingController();
 
   final PaymentService _paymentService = PaymentService.instance;
@@ -35,28 +33,58 @@ class _PaymentPageState extends State<PaymentPage> {
 
   bool _isProcessing = false;
   bool _savePaymentMethod = true;
+  bool _isInitializing = true;
   SubscriptionPlan? _selectedPlan;
 
   @override
   void initState() {
     super.initState();
-    _loadPlanDetails();
+    _initializePaymentPage();
   }
 
   @override
   void dispose() {
-    _cardNumberController.dispose();
-    _expMonthController.dispose();
-    _expYearController.dispose();
-    _cvcController.dispose();
     _nameController.dispose();
     super.dispose();
   }
 
+  Future<void> _initializePaymentPage() async {
+    try {
+      // Initialize PaymentService first (this sets up Stripe PaymentConfiguration)
+      await _paymentService.initialize();
+      _loadPlanDetails();
+    } catch (e) {
+      debugPrint('❌ Failed to initialize payment page: $e');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showErrorDialog(
+            'Payment system initialization failed. Please try again.',
+          );
+          Navigator.of(context).pop();
+        }
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isInitializing = false);
+      }
+    }
+  }
+
   void _loadPlanDetails() {
-    _selectedPlan = _subscriptionService.availablePlans.firstWhere(
-      (plan) => plan.tier == widget.tier,
-    );
+    try {
+      _selectedPlan = _subscriptionService.availablePlans.firstWhere(
+        (plan) => plan.tier == widget.tier,
+      );
+    } catch (e) {
+      debugPrint('❌ Failed to load plan for tier ${widget.tier}: $e');
+      // If plan not found, show error and go back
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showErrorDialog('Plan not available. Please try again.');
+          Navigator.of(context).pop();
+        }
+      });
+    }
     setState(() {});
   }
 
@@ -65,18 +93,31 @@ class _PaymentPageState extends State<PaymentPage> {
       return;
     }
 
+    // Validate cardholder name
+    if (_nameController.text.trim().isEmpty) {
+      _showErrorDialog('Please enter cardholder name');
+      return;
+    }
+
     setState(() => _isProcessing = true);
 
     try {
-      // Add payment method
-      final paymentMethod = await _paymentService.addPaymentMethod(
-        type: PaymentMethodType.creditCard,
-        cardNumber: _cardNumberController.text.replaceAll(' ', ''),
-        expMonth: int.parse(_expMonthController.text),
-        expYear: int.parse('20${_expYearController.text}'),
-        cvc: _cvcController.text,
-        setAsDefault: _savePaymentMethod,
+      // Create token from CardField (CardField must be present in the form)
+      // CardField automatically provides card data to Stripe SDK
+      final tokenData = await stripe.Stripe.instance.createToken(
+        const stripe.CreateTokenParams.card(params: stripe.CardTokenParams()),
       );
+
+      // Create payment method from token
+      final paymentMethod = await stripe.Stripe.instance.createPaymentMethod(
+        params: stripe.PaymentMethodParams.cardFromToken(
+          paymentMethodData: stripe.PaymentMethodDataCardFromToken(
+            token: tokenData.id,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
 
       // Process payment
       final transaction = await _paymentService.processSubscriptionPayment(
@@ -94,7 +135,7 @@ class _PaymentPageState extends State<PaymentPage> {
 
         // Navigate back to profile or main
         if (mounted) {
-          context.go('/main');
+          context.go(AppLaunchConfig.homeRoute);
         }
       } else {
         // Show error dialog
@@ -104,7 +145,7 @@ class _PaymentPageState extends State<PaymentPage> {
       }
     } catch (e) {
       if (mounted) {
-        _showErrorDialog('An error occurred: $e');
+        _showErrorDialog('An error occurred: ${e.toString()}');
       }
     } finally {
       if (mounted) {
@@ -199,8 +240,20 @@ class _PaymentPageState extends State<PaymentPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_selectedPlan == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    // Show loading while initializing Stripe or loading plan
+    if (_isInitializing || _selectedPlan == null) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Initializing payment system...'),
+            ],
+          ),
+        ),
+      );
     }
 
     final amount = widget.isYearlyBilling
@@ -308,35 +361,6 @@ class _PaymentPageState extends State<PaymentPage> {
               ),
               const SizedBox(height: 16),
 
-              // Card number
-              TextFormField(
-                controller: _cardNumberController,
-                decoration: const InputDecoration(
-                  labelText: 'Card Number',
-                  hintText: '1234 5678 9012 3456',
-                  prefixIcon: Icon(Icons.credit_card),
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(16),
-                  _CardNumberFormatter(),
-                ],
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter card number';
-                  }
-                  final cleaned = value.replaceAll(' ', '');
-                  if (cleaned.length < 13 || cleaned.length > 16) {
-                    return 'Invalid card number';
-                  }
-                  return null;
-                },
-              ),
-
-              const SizedBox(height: 16),
-
               // Cardholder name
               TextFormField(
                 controller: _nameController,
@@ -357,86 +381,18 @@ class _PaymentPageState extends State<PaymentPage> {
 
               const SizedBox(height: 16),
 
-              // Expiry and CVC
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _expMonthController,
-                      decoration: const InputDecoration(
-                        labelText: 'Exp Month',
-                        hintText: 'MM',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(2),
-                      ],
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Required';
-                        }
-                        final month = int.tryParse(value);
-                        if (month == null || month < 1 || month > 12) {
-                          return 'Invalid';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _expYearController,
-                      decoration: const InputDecoration(
-                        labelText: 'Exp Year',
-                        hintText: 'YY',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(2),
-                      ],
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Required';
-                        }
-                        final year = int.tryParse('20$value');
-                        if (year == null || year < DateTime.now().year) {
-                          return 'Invalid';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _cvcController,
-                      decoration: const InputDecoration(
-                        labelText: 'CVC',
-                        hintText: '123',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(4),
-                      ],
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Required';
-                        }
-                        if (value.length < 3) {
-                          return 'Invalid';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                ],
+              // Stripe CardField widget (collects card number, expiry, CVC securely)
+              stripe.CardField(
+                onCardChanged: (card) {
+                  // Card data is automatically captured by Stripe SDK
+                  // No need to manually store it
+                },
+                enablePostalCode: false,
+                decoration: const InputDecoration(
+                  labelText: 'Card Information',
+                  prefixIcon: Icon(Icons.credit_card),
+                  border: OutlineInputBorder(),
+                ),
               ),
 
               const SizedBox(height: 16),
@@ -529,31 +485,6 @@ class _PaymentPageState extends State<PaymentPage> {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Card number formatter to add spaces every 4 digits
-class _CardNumberFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final text = newValue.text.replaceAll(' ', '');
-    final buffer = StringBuffer();
-
-    for (int i = 0; i < text.length; i++) {
-      if (i > 0 && i % 4 == 0) {
-        buffer.write(' ');
-      }
-      buffer.write(text[i]);
-    }
-
-    final formattedText = buffer.toString();
-    return TextEditingValue(
-      text: formattedText,
-      selection: TextSelection.collapsed(offset: formattedText.length),
     );
   }
 }

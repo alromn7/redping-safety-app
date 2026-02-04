@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/phone_ai_integration_service.dart';
+import '../services/phone_voice_integration_service.dart';
 
 /// Voice Command Widget
 /// Displays voice command status, available commands, and provides UI controls
@@ -12,7 +12,8 @@ class VoiceCommandWidget extends StatefulWidget {
 
 class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
     with SingleTickerProviderStateMixin {
-  final PhoneAIIntegrationService _phoneAI = PhoneAIIntegrationService();
+  final PhoneVoiceIntegrationService _phoneVoice =
+      PhoneVoiceIntegrationService();
 
   bool _isListening = false;
   String _recognizedText = '';
@@ -37,7 +38,7 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
     );
 
     // Setup callbacks
-    _phoneAI.setOnListeningStateChanged((isListening) {
+    _phoneVoice.setOnListeningStateChanged((isListening) {
       if (mounted) {
         setState(() {
           _isListening = isListening;
@@ -45,7 +46,7 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
       }
     });
 
-    _phoneAI.setOnVoiceRecognized((text) {
+    _phoneVoice.setOnVoiceRecognized((text) {
       if (mounted) {
         setState(() {
           _recognizedText = text;
@@ -53,7 +54,7 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
       }
     });
 
-    _phoneAI.setOnVoiceCommand((command) {
+    _phoneVoice.setOnVoiceCommand((command) {
       if (mounted) {
         setState(() {
           _lastCommand = command;
@@ -62,7 +63,7 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
     });
 
     // Check listening status
-    _isListening = _phoneAI.isListening;
+    _isListening = _phoneVoice.isListening;
   }
 
   @override
@@ -122,11 +123,11 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
                 ),
                 // Toggle button
                 Switch(
-                  value: _phoneAI.voiceCommandsEnabled,
+                  value: _phoneVoice.voiceCommandsEnabled,
                   onChanged: (value) async {
-                    await _phoneAI.setVoiceCommandsEnabled(value);
+                    await _phoneVoice.setVoiceCommandsEnabled(value);
                     if (value && !_isListening) {
-                      await _phoneAI.startVoiceListening();
+                      _phoneVoice.startVoiceListening();
                     }
                     setState(() {});
                   },
@@ -236,14 +237,14 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
                   child: ElevatedButton.icon(
                     onPressed: _isListening
                         ? () async {
-                            await _phoneAI.stopVoiceListening();
+                            _phoneVoice.stopVoiceListening();
                             setState(() {});
                           }
                         : () async {
-                            if (!_phoneAI.isInitialized) {
-                              await _phoneAI.initialize();
+                            if (!_phoneVoice.isInitialized) {
+                              await _phoneVoice.initialize();
                             }
-                            await _phoneAI.startVoiceListening();
+                            _phoneVoice.startVoiceListening();
                             setState(() {});
                           },
                     icon: Icon(_isListening ? Icons.stop : Icons.mic),
@@ -258,7 +259,7 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
                 const SizedBox(width: 12),
                 ElevatedButton.icon(
                   onPressed: () async {
-                    await _phoneAI.speak(
+                    await _phoneVoice.speak(
                       'Voice commands are ready. Say Hey RedPing to activate.',
                     );
                   },
@@ -280,7 +281,7 @@ class _VoiceCommandWidgetState extends State<VoiceCommandWidget>
   }
 
   List<Widget> _buildCommandsList() {
-    final commands = _phoneAI.getAvailableCommands();
+    final commands = _phoneVoice.getAvailableCommands();
     final widgets = <Widget>[];
 
     commands.forEach((key, patterns) {
@@ -377,7 +378,8 @@ class VoiceStatusIndicator extends StatefulWidget {
 
 class _VoiceStatusIndicatorState extends State<VoiceStatusIndicator>
     with SingleTickerProviderStateMixin {
-  final PhoneAIIntegrationService _phoneAI = PhoneAIIntegrationService();
+  final PhoneVoiceIntegrationService _phoneVoice =
+      PhoneVoiceIntegrationService();
   bool _isListening = false;
   late AnimationController _animController;
 
@@ -390,7 +392,7 @@ class _VoiceStatusIndicatorState extends State<VoiceStatusIndicator>
       vsync: this,
     )..repeat(reverse: true);
 
-    _phoneAI.setOnListeningStateChanged((isListening) {
+    _phoneVoice.setOnListeningStateChanged((isListening) {
       if (mounted) {
         setState(() {
           _isListening = isListening;
@@ -398,7 +400,7 @@ class _VoiceStatusIndicatorState extends State<VoiceStatusIndicator>
       }
     });
 
-    _isListening = _phoneAI.isListening;
+    _isListening = _phoneVoice.isListening;
   }
 
   @override

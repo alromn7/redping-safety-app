@@ -1,6 +1,6 @@
 import 'package:logger/logger.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import '../config/app_optimization_config.dart';
+// import 'package:firebase_crashlytics/firebase_crashlytics.dart';  // REMOVED: Phase 2
+// import '../config/app_optimization_config.dart';  // REMOVED: Phase 2 - no longer needed
 
 /// App-wide logger wrapper for consistent, leveled logging.
 class AppLogger {
@@ -14,9 +14,9 @@ class AppLogger {
   static final _latLngRx = RegExp(
     r"(-?\d{1,2}\.\d{3,}),\s*(-?\d{1,3}\.\d{3,})",
   );
-  // Common API key patterns (Google, OpenAI). Best-effort redaction only.
+  // Common API key patterns. Best-effort redaction only.
   static final _googleApiKeyRx = RegExp(r"AIza[0-9A-Za-z-_]{35}");
-  static final _openAiKeyRx = RegExp(r"sk-[A-Za-z0-9]{20,}");
+  static final _genericSkKeyRx = RegExp(r"sk-[A-Za-z0-9]{20,}");
 
   static String _sanitize(String input) {
     var out = input;
@@ -27,7 +27,7 @@ class AppLogger {
       _googleApiKeyRx,
       (_) => '<redacted:google-api-key>',
     );
-    out = out.replaceAllMapped(_openAiKeyRx, (_) => '<redacted:api-key>');
+    out = out.replaceAllMapped(_genericSkKeyRx, (_) => '<redacted:api-key>');
     return out;
   }
 
@@ -51,12 +51,7 @@ class AppLogger {
   }) {
     final m = _sanitize(tag != null ? '$tag: $message' : message);
     _logger.d(m, error: error, stackTrace: stackTrace);
-    // Forward as breadcrumb in production
-    if (AppOptimizationConfig.isProduction) {
-      try {
-        FirebaseCrashlytics.instance.log(m);
-      } catch (_) {}
-    }
+    // Phase 2: Crashlytics removed
   }
 
   static void i(
@@ -67,11 +62,7 @@ class AppLogger {
   }) {
     final m = _sanitize(tag != null ? '$tag: $message' : message);
     _logger.i(m, error: error, stackTrace: stackTrace);
-    if (AppOptimizationConfig.isProduction) {
-      try {
-        FirebaseCrashlytics.instance.log(m);
-      } catch (_) {}
-    }
+    // Phase 2: Crashlytics removed
   }
 
   static void w(
@@ -82,15 +73,7 @@ class AppLogger {
   }) {
     final m = _sanitize(tag != null ? '$tag: $message' : message);
     _logger.w(m, error: error, stackTrace: stackTrace);
-    if (AppOptimizationConfig.isProduction) {
-      try {
-        // Log warning as breadcrumb; attach error context if provided
-        FirebaseCrashlytics.instance.log('[WARN] $m');
-        if (error != null) {
-          FirebaseCrashlytics.instance.setCustomKey('last_warning', m);
-        }
-      } catch (_) {}
-    }
+    // Phase 2: Crashlytics removed
   }
 
   static void e(
@@ -101,31 +84,11 @@ class AppLogger {
   }) {
     final m = _sanitize(tag != null ? '$tag: $message' : message);
     _logger.e(m, error: error, stackTrace: stackTrace);
-    if (AppOptimizationConfig.isProduction) {
-      try {
-        // Record as non-fatal in Crashlytics
-        if (error != null) {
-          FirebaseCrashlytics.instance.recordError(
-            error,
-            stackTrace ?? StackTrace.current,
-            reason: m,
-            fatal: false,
-          );
-        } else {
-          FirebaseCrashlytics.instance.recordError(
-            Exception(m),
-            stackTrace ?? StackTrace.current,
-            fatal: false,
-          );
-        }
-      } catch (_) {}
-    }
+    // Phase 2: Crashlytics removed
   }
 
-  /// Optionally set user identifier in Crashlytics.
+  /// Phase 2: Crashlytics removed
   static Future<void> setUserId(String userId) async {
-    try {
-      await FirebaseCrashlytics.instance.setUserIdentifier(userId);
-    } catch (_) {}
+    // No-op
   }
 }

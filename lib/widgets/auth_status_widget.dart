@@ -1,10 +1,9 @@
-import '../models/subscription_tier.dart' as sub;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../models/auth_user.dart';
 import '../services/auth_service.dart';
-import '../services/subscription_service.dart';
 import '../core/theme/app_theme.dart';
+import '../services/connectivity_monitor_service.dart';
 
 class AuthStatusWidget extends StatefulWidget {
   const AuthStatusWidget({super.key});
@@ -15,19 +14,15 @@ class AuthStatusWidget extends StatefulWidget {
 
 class _AuthStatusWidgetState extends State<AuthStatusWidget> {
   late final AuthService _authService;
-  late final SubscriptionService _subscriptionService;
   AuthUser _currentUser = AuthUser.empty;
   AuthStatus _status = AuthStatus.unknown;
-  UserSubscription? _currentSubscription;
 
   @override
   void initState() {
     super.initState();
     _authService = AuthService.instance;
-    _subscriptionService = SubscriptionService.instance;
     _currentUser = _authService.currentUser;
     _status = _authService.status;
-    _currentSubscription = _subscriptionService.currentSubscription;
 
     // Listen to authentication changes
     _authService.userStream.listen((user) {
@@ -42,12 +37,6 @@ class _AuthStatusWidgetState extends State<AuthStatusWidget> {
       }
     });
 
-    // Listen to subscription changes
-    _subscriptionService.subscriptionStream.listen((subscription) {
-      if (mounted) {
-        setState(() => _currentSubscription = subscription);
-      }
-    });
   }
 
   Future<void> _handleSignOut() async {
@@ -123,9 +112,14 @@ class _AuthStatusWidgetState extends State<AuthStatusWidget> {
               ListTile(
                 leading: CircleAvatar(
                   backgroundColor: AppTheme.primaryRed,
-                  backgroundImage: _currentUser.photoUrl != null
-                      ? NetworkImage(_currentUser.photoUrl!)
-                      : null,
+                  backgroundImage: () {
+                    final offline = ConnectivityMonitorService().isEffectivelyOffline;
+                    final url = _currentUser.photoUrl;
+                    if (!offline && url != null) {
+                      return NetworkImage(url);
+                    }
+                    return null;
+                  }(),
                   child: _currentUser.photoUrl == null
                       ? Text(
                           _currentUser.displayName.isNotEmpty
@@ -165,26 +159,6 @@ class _AuthStatusWidgetState extends State<AuthStatusWidget> {
                 onTap: () {
                   Navigator.pop(context);
                   context.push('/settings');
-                },
-              ),
-
-              // Subscription option
-              ListTile(
-                leading: Icon(
-                  _currentSubscription?.plan.isFamilyPlan == true
-                      ? Icons.family_restroom_outlined
-                      : Icons.card_membership_outlined,
-                  color: _getSubscriptionColor(),
-                ),
-                title: Text(_getSubscriptionTitle()),
-                subtitle: Text(_getSubscriptionSubtitle()),
-                onTap: () {
-                  Navigator.pop(context);
-                  if (_currentSubscription?.plan.isFamilyPlan == true) {
-                    context.push('/subscription/family-dashboard');
-                  } else {
-                    context.push('/subscription/plans');
-                  }
                 },
               ),
 
@@ -250,47 +224,6 @@ class _AuthStatusWidgetState extends State<AuthStatusWidget> {
     );
   }
 
-  Color _getSubscriptionColor() {
-    if (_currentSubscription == null) return Colors.grey;
-
-    switch (_currentSubscription!.plan.tier) {
-      case sub.SubscriptionTier.essentialPlus:
-        return AppTheme.successGreen;
-      case sub.SubscriptionTier.pro:
-        return AppTheme.infoBlue;
-      case sub.SubscriptionTier.ultra:
-        return AppTheme.primaryRed;
-      case sub.SubscriptionTier.family:
-        return AppTheme.warningOrange;
-      case sub.SubscriptionTier.free:
-        return Colors.grey;
-    }
-  }
-
-  String _getSubscriptionTitle() {
-    if (_currentSubscription == null) {
-      return 'View Plans';
-    }
-
-    if (_currentSubscription!.plan.isFamilyPlan) {
-      return 'Family Dashboard';
-    }
-
-    return '${_currentSubscription!.plan.name} Plan';
-  }
-
-  String _getSubscriptionSubtitle() {
-    if (_currentSubscription == null) {
-      return 'Choose a subscription plan';
-    }
-
-    if (_currentSubscription!.plan.isFamilyPlan) {
-      return 'Manage family subscription';
-    }
-
-    return 'Connected to SAR Network';
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_status == AuthStatus.loading) {
@@ -312,9 +245,14 @@ class _AuthStatusWidgetState extends State<AuthStatusWidget> {
                 CircleAvatar(
                   radius: 16,
                   backgroundColor: AppTheme.primaryRed,
-                  backgroundImage: _currentUser.photoUrl != null
-                      ? NetworkImage(_currentUser.photoUrl!)
-                      : null,
+                  backgroundImage: () {
+                    final offline = ConnectivityMonitorService().isEffectivelyOffline;
+                    final url = _currentUser.photoUrl;
+                    if (!offline && url != null) {
+                      return NetworkImage(url);
+                    }
+                    return null;
+                  }(),
                   child: _currentUser.photoUrl == null
                       ? Text(
                           _currentUser.displayName.isNotEmpty

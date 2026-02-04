@@ -201,8 +201,6 @@ class _SOSAccessControlState extends State<SOSAccessControl> {
         return 'REDP!NG Help requests are limited on your current plan. Upgrade for unlimited help requests.';
       case 'satelliteComm':
         return 'Satellite communication requires a Pro or higher subscription for emergency situations.';
-      case 'aiAssistant':
-        return 'AI Assistant features require a subscription upgrade for enhanced safety guidance.';
       case 'sarParticipation':
         return 'SAR participation requires Pro or higher subscription to join rescue operations.';
       default:

@@ -206,10 +206,10 @@ class _PrivacySettingsPageState extends State<PrivacySettingsPage>
       body: TabBarView(
         controller: _tabController,
         children: [
-          _buildSimplePermissionsTest(),
-          _buildSimpleDataTest(),
-          _buildSimpleSecurityTest(),
-          _buildSimpleComplianceTest(),
+          _buildPermissionsTab(),
+          _buildDataTab(),
+          _buildSecurityTab(),
+          _buildComplianceTab(),
         ],
       ),
     );

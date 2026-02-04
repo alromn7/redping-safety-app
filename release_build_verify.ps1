@@ -8,6 +8,8 @@ param(
     [switch] $SkipClean,
     [switch] $SkipAAB,
     [switch] $SkipAPK,
+    [ValidateSet('sos','sar')] [string] $Flavor = 'sos',
+    [string] $Target,
     [string] $FlutterPath = "flutter"
 )
 
@@ -62,16 +64,34 @@ function Read-KeyProperties {
 
 function Build-Artifacts($flutter) {
     if (-not $SkipClean) { & $flutter clean }
-    if (-not $SkipAAB) { & $flutter build appbundle --release }
-    if (-not $SkipAPK) { & $flutter build apk --release }
+    if (-not $SkipAAB) {
+        & $flutter build appbundle --release --flavor $Flavor -t $Target
+    }
+    if (-not $SkipAPK) {
+        & $flutter build apk --release --flavor $Flavor -t $Target
+    }
 }
 
 function Get-Fingerprints($keystoreInfo) {
     Assert-Command 'keytool'
-    $output = keytool -list -v -keystore $keystoreInfo.StoreFile -storepass $keystoreInfo.StorePassword -alias $keystoreInfo.KeyAlias 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "keytool list failed: $output" }
-    $sha1 = ($output | Select-String -Pattern 'SHA1:' | Select-Object -First 1).ToString().Trim()
-    $sha256 = ($output | Select-String -Pattern 'SHA-256:' | Select-Object -First 1).ToString().Trim()
+    # keytool sometimes writes warnings to stderr; PowerShell may treat them as errors.
+    # We capture combined output and rely on exit code for success/failure.
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = (
+            keytool -list -v -keystore $keystoreInfo.StoreFile -storepass $keystoreInfo.StorePassword -alias $keystoreInfo.KeyAlias 2>&1 |
+                ForEach-Object { $_.ToString() }
+        )
+    } finally {
+        $ErrorActionPreference = $oldEap
+    }
+
+    if ($LASTEXITCODE -ne 0) { throw "keytool list failed: $($output -join [Environment]::NewLine)" }
+    $sha1Match = $output | Select-String -Pattern 'SHA1:' | Select-Object -First 1
+    $sha256Match = $output | Select-String -Pattern 'SHA-256:|SHA256:' | Select-Object -First 1
+    $sha1 = if ($sha1Match) { $sha1Match.Line.Trim() } else { '' }
+    $sha256 = if ($sha256Match) { $sha256Match.Line.Trim() } else { '' }
     return [pscustomobject]@{ SHA1=$sha1; SHA256=$sha256 }
 }
 
@@ -90,11 +110,22 @@ function Main {
     $keyInfo = Read-KeyProperties
     Write-Host "Keystore: $($keyInfo.StoreFile) Alias: $($keyInfo.KeyAlias)" -ForegroundColor Green
 
+    if (-not $Target -or $Target.Trim().Length -eq 0) {
+        $Target = switch ($Flavor) {
+            'sos' { 'lib/main_sos.dart' }
+            'sar' { 'lib/main_sar.dart' }
+        }
+    }
+    if (-not (Test-Path (Join-Path $PSScriptRoot $Target))) {
+        throw "Target file not found: $Target"
+    }
+    Write-Host "Flavor: $Flavor Target: $Target" -ForegroundColor Green
+
     Write-Host "[2/5] Building artifacts..." -ForegroundColor Cyan
     Build-Artifacts $FlutterPath
 
-    $aab = Join-Path $PSScriptRoot 'build\app\outputs\bundle\release\app-release.aab'
-    $apk = Join-Path $PSScriptRoot 'build\app\outputs\flutter-apk\app-release.apk'
+    $aab = Join-Path $PSScriptRoot ("build\app\outputs\bundle\{0}Release\app-{0}-release.aab" -f $Flavor)
+    $apk = Join-Path $PSScriptRoot ("build\app\outputs\flutter-apk\app-{0}-release.apk" -f $Flavor)
     Write-Host "AAB: $(if (Test-Path $aab) {(Get-Item $aab).Length/1MB -as [int]}) MB" -ForegroundColor Yellow
     Write-Host "APK: $(if (Test-Path $apk) {(Get-Item $apk).Length/1MB -as [int]}) MB" -ForegroundColor Yellow
 
@@ -109,4 +140,18 @@ function Main {
     Write-Host "[5/5] Complete." -ForegroundColor Green
 }
 
-try { Main } catch { Write-Error $_; exit 1 }
+try {
+    Main
+} catch {
+    Write-Host "❌ release_build_verify failed" -ForegroundColor Red
+    if ($_.Exception -and $_.Exception.Message) {
+        Write-Host ("Message: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    }
+    if ($_.ScriptStackTrace) {
+        Write-Host "Script stack:" -ForegroundColor DarkRed
+        Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
+    }
+    Write-Host "Details:" -ForegroundColor DarkRed
+    Write-Host (($_ | Format-List -Force | Out-String).Trim()) -ForegroundColor DarkRed
+    exit 1
+}

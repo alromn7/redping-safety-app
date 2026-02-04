@@ -27,6 +27,9 @@ import 'sms_service.dart';
 import 'notification_scheduler.dart';
 import 'sos_analytics_service.dart';
 import 'incident_escalation_coordinator.dart';
+import 'connectivity_monitor_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 
 // Developer exemption email
 const String _developerEmail = 'alromn7@gmail.com';
@@ -40,7 +43,6 @@ class SOSService {
   final SensorService _sensorService = SensorService();
   final LocationService _locationService = LocationService();
   final EmergencyContactsService _contactsService = EmergencyContactsService();
-  final ChatService _chatService = ChatService();
   final UserProfileService _userProfileService = UserProfileService();
   final SatelliteService _satelliteService = SatelliteService();
   final RescueResponseService _rescueResponseService = RescueResponseService();
@@ -401,7 +403,7 @@ class SOSService {
   }
 
   /// Activate SOS immediately without countdown (for manual button activation)
-  /// The 10-second button hold serves as the countdown, so we skip the service countdown
+  /// The 5-second button hold serves as the countdown, so we skip the service countdown
   Future<SOSSession> activateSOSImmediately({
     SOSType type = SOSType.manual,
     String? userMessage,
@@ -529,14 +531,15 @@ class SOSService {
     HapticFeedback.heavyImpact();
 
     AppLogger.i(
-      'Immediate SOS activated - ${_currentSession!.id}',
+      'Immediate SOS created - ${_currentSession!.id}',
       tag: 'SOSService',
     );
 
-    // Activate SOS immediately (no countdown)
-    await _activateSOS();
-
+    // Notify UI immediately so offline activation shows without waiting
     _onSessionStarted?.call(_currentSession!);
+
+    // Activate SOS (no countdown); performs networking/offline enqueue
+    await _activateSOS();
 
     return _currentSession!;
   }
@@ -575,7 +578,7 @@ class SOSService {
     AppLogger.i('SOS cancelled - ${cancelledSession.id}', tag: 'SOSService');
     _onSessionEnded?.call(cancelledSession);
 
-    // AI monitoring removed - SMS notifications handle emergency contact alerts
+    // Auto-monitoring removed - SMS notifications handle emergency contact alerts
     try {
       AppLogger.i(
         'SOS cancelled - SMS notifications will send cancellation message',
@@ -609,17 +612,37 @@ class SOSService {
 
     _countdownTimer?.cancel();
 
-    // Clear any stale active session pointer to prevent Cloud Function from auto-resolving this session
+    // Determine connectivity upfront, treating Wi‑Fi without internet as offline
+    bool isOffline = true;
     try {
-      final authUser = AuthService.instance.currentUser;
-      if (authUser.id.isNotEmpty) {
-        await _sosRepository.clearActiveSessionPointer(authUser.id);
-        debugPrint(
-          'SOSService: Cleared stale active session pointer before activation',
-        );
+      final results = await Connectivity().checkConnectivity();
+      final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
+      if (!hasInterfaces) {
+        isOffline = true;
+      } else {
+        // Probe internet reachability quickly (2s timeout)
+        isOffline =
+            !(await ConnectivityMonitorService().isInternetReachable(
+          timeout: const Duration(seconds: 2),
+        ));
       }
-    } catch (e) {
-      debugPrint('SOSService: Failed to clear active session pointer - $e');
+    } catch (_) {
+      isOffline = true;
+    }
+
+    // Clear any stale active session pointer to prevent Cloud Function from auto-resolving this session
+    if (!isOffline) {
+      try {
+        final authUser = AuthService.instance.currentUser;
+        if (authUser.id.isNotEmpty) {
+          await _sosRepository.clearActiveSessionPointer(authUser.id);
+          debugPrint(
+            'SOSService: Cleared stale active session pointer before activation',
+          );
+        }
+      } catch (e) {
+        debugPrint('SOSService: Failed to clear active session pointer - $e');
+      }
     }
 
     // Switch sensors to ACTIVE MODE for high-frequency monitoring during SOS
@@ -654,6 +677,21 @@ class SOSService {
         // Guard: ensure session is still active
         final session = _currentSession;
         if (session == null || session.status != SOSStatus.active) return;
+
+        // Skip Firestore writes when offline (or Wi‑Fi without internet)
+        try {
+          final results = await Connectivity().checkConnectivity();
+          final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
+          if (!hasInterfaces) return;
+          final reachable =
+              await ConnectivityMonitorService().isInternetReachable(
+            timeout: const Duration(seconds: 2),
+          );
+          if (!reachable) return;
+        } catch (_) {
+          return;
+        }
+
         try {
           // Append ping to subcollection
           await _sosRepository.addLocationPing(session.id, loc);
@@ -670,68 +708,82 @@ class SOSService {
       _locationWriterAttached = true;
     }
 
-    // Persist session to Firestore: prefer server callable (regional) with fallback
-    try {
-      // Try server-mediated creation for better latency and server-side enforcement
+    // Persist session to Firestore when online; otherwise, offline-first enqueue
+    if (!isOffline) {
       try {
-        final preferredRegion = await _getPreferredRegionCode();
-        final client = SosCallableClient();
-        final loc = _currentSession!.location;
-        final sessionId = await client.createSession(
-          preferredRegion: preferredRegion,
-          type: _mapTypeForServer(_currentSession!.type),
-          userMessage: _currentSession!.userMessage,
-          location: {
-            'lat': loc.latitude,
-            'lng': loc.longitude,
-            'accuracy': loc.accuracy,
-            if (loc.address != null && loc.address!.isNotEmpty)
-              'address': loc.address,
-          },
-        );
-        // Adopt server-assigned id
-        _currentSession = _currentSession!.copyWith(id: sessionId);
-      } catch (e) {
-        // Fallback: client-side merge write
-        AppLogger.w(
-          'Callable createSosSession failed; falling back to direct write',
-          tag: 'SOSService',
-          error: e,
-        );
-      }
-
-      // Merge app-side fields (contacts, profile, impact, etc.) into header
-      await _sosRepository.createOrUpdateFromSession(_currentSession!);
-
-      // Set the active session pointer so Cloud Function knows this is the current session
-      try {
-        final authUser = AuthService.instance.currentUser;
-        if (authUser.id.isNotEmpty) {
-          await _sosRepository.setActiveSessionPointer(
-            authUser.id,
-            _currentSession!.id,
+        // Try server-mediated creation for better latency and server-side enforcement
+        try {
+          final preferredRegion = await _getPreferredRegionCode();
+          final client = SosCallableClient();
+          final loc = _currentSession!.location;
+          final sessionId = await client.createSession(
+            preferredRegion: preferredRegion,
+            type: _mapTypeForServer(_currentSession!.type),
+            userMessage: _currentSession!.userMessage,
+            location: {
+              'lat': loc.latitude,
+              'lng': loc.longitude,
+              'accuracy': loc.accuracy,
+              if (loc.address != null && loc.address!.isNotEmpty)
+                'address': loc.address,
+            },
+          );
+          // Adopt server-assigned id
+          _currentSession = _currentSession!.copyWith(id: sessionId);
+        } catch (e) {
+          // Fallback: client-side merge write
+          AppLogger.w(
+            'Callable createSosSession failed; falling back to direct write',
+            tag: 'SOSService',
+            error: e,
           );
         }
+
+        // Merge app-side fields (contacts, profile, impact, etc.) into header
+        await _sosRepository.createOrUpdateFromSession(_currentSession!);
+
+        // Set the active session pointer so Cloud Function knows this is the current session
+        try {
+          final authUser = AuthService.instance.currentUser;
+          if (authUser.id.isNotEmpty) {
+            await _sosRepository.setActiveSessionPointer(
+              authUser.id,
+              _currentSession!.id,
+            );
+          }
+        } catch (e) {
+          debugPrint('SOSService: Failed to set active session pointer - $e');
+        }
+
+        // Start listening for status updates from SAR coordinators
+        _startFirestoreListener(_currentSession!.id);
+
+        AppLogger.i(
+          'SOS session persisted to Firestore and listener started',
+          tag: 'SOSService',
+        );
       } catch (e) {
-        debugPrint('SOSService: Failed to set active session pointer - $e');
+        AppLogger.w('Failed to persist sos_session', tag: 'SOSService', error: e);
+        // Queue for offline delivery and continue app flow
+        try {
+          await OfflineSOSQueueService().enqueue(
+            _currentSession!,
+            reason: 'persist_failed',
+          );
+        } catch (_) {}
       }
-
-      // Start listening for status updates from SAR coordinators
-      _startFirestoreListener(_currentSession!.id);
-
-      AppLogger.i(
-        'SOS session persisted to Firestore and listener started',
-        tag: 'SOSService',
-      );
-    } catch (e) {
-      AppLogger.w('Failed to persist sos_session', tag: 'SOSService', error: e);
-      // Queue for offline delivery and continue app flow
+    } else {
+      // Offline: enqueue immediately and offer SMS prompt
       try {
         await OfflineSOSQueueService().enqueue(
           _currentSession!,
-          reason: 'persist_failed',
+          reason: 'offline',
         );
-      } catch (_) {}
+        await OfflineSOSQueueService().offerSmsPrompt(_currentSession!);
+        AppLogger.i('Offline mode: SOS enqueued and SMS prompt shown', tag: 'SOSService');
+      } catch (e) {
+        AppLogger.w('Offline enqueue failed', tag: 'SOSService', error: e);
+      }
     }
 
     // Send alerts to emergency contacts
@@ -745,22 +797,77 @@ class SOSService {
       } catch (_) {}
     }
 
-    // Start SMS notifications to emergency contacts
+    // SMS-first alerts with Wi‑Fi/internet share fallback
     try {
       final contacts = _contactsService.enabledContacts;
       if (contacts.isNotEmpty) {
-        await SMSService.instance.startSMSNotifications(
-          _currentSession!,
-          contacts,
-        );
-        AppLogger.i(
-          'SMS notifications started for ${contacts.length} emergency contacts',
-          tag: 'SOSService',
-        );
+        final prefs = await SharedPreferences.getInstance();
+        final enableSms = prefs.getBool('enable_sms_notifications') ?? false;
+        final results = await Connectivity().checkConnectivity();
+        final hasMobile = results.any((r) => r == ConnectivityResult.mobile);
+        bool hasInternet = false;
+        try {
+          final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
+          hasInternet = hasInterfaces &&
+              await ConnectivityMonitorService().isInternetReachable(
+                timeout: const Duration(seconds: 2),
+              );
+        } catch (_) {
+          hasInternet = false;
+        }
+
+        bool smsStarted = false;
+
+        // Attempt carrier SMS first when enabled and mobile is available
+        if (enableSms && hasMobile) {
+          try {
+            await SMSService.instance.startSMSNotifications(
+              _currentSession!,
+              contacts,
+            );
+            smsStarted = true;
+            AppLogger.i(
+              'SMS notifications started for ${contacts.length} emergency contacts',
+              tag: 'SOSService',
+            );
+          } catch (e) {
+            AppLogger.w(
+              'Failed to start SMS notifications (will fallback to internet)',
+              tag: 'SOSService',
+              error: e,
+            );
+          }
+        }
+
+        // Wi‑Fi/internet-only fallback: offer a user-driven Share prompt.
+        // This works locally and overseas as long as the internet works.
+        if (!smsStarted && hasInternet && !hasMobile) {
+          try {
+            await OfflineSOSQueueService().offerSharePrompt(_currentSession!);
+            AppLogger.i(
+              'Wi‑Fi/internet-only: offered Share prompt for SOS message',
+              tag: 'SOSService',
+            );
+          } catch (e) {
+            AppLogger.w(
+              'Failed to offer Share prompt',
+              tag: 'SOSService',
+              error: e,
+            );
+          }
+        }
+
+        // If neither SMS nor internet is available, offer manual SMS prompt
+        if (!smsStarted && !hasInternet) {
+          try {
+            await OfflineSOSQueueService().offerSmsPrompt(_currentSession!);
+            AppLogger.i('No internet/mobile: offered SMS prompt', tag: 'SOSService');
+          } catch (_) {}
+        }
       }
     } catch (e) {
       AppLogger.w(
-        'Failed to start SMS notifications',
+        'Alert delivery (SMS/Internet) flow error',
         tag: 'SOSService',
         error: e,
       );
@@ -777,9 +884,6 @@ class SOSService {
         error: e,
       );
     }
-
-    // Send detailed SOS message to chat channels
-    await _sendSOSChatMessage();
 
     // Send emergency SOS via satellite if available
     await _sendSatelliteEmergencyAlert();
@@ -821,8 +925,7 @@ class SOSService {
       // Continue without SOS ping
     }
 
-    // 🤖 AI: Start monitoring for auto emergency services call
-    // AI emergency call monitoring removed - SMS notifications handle all emergency alerts
+    // Auto-call monitoring removed - SMS notifications handle emergency alerts
     if (_currentSession!.type == SOSType.crashDetection ||
         _currentSession!.type == SOSType.fallDetection) {
       AppLogger.i(
@@ -930,10 +1033,10 @@ class SOSService {
     final currentUser = _userProfileService.currentProfile;
     final userId = currentUser?.id ?? 'anonymous_user';
 
-    // Generate AI-powered crash description based on impact data
+    // Generate crash description based on impact data
     final crashMessage = _generateCrashMessage(impactInfo);
 
-    // Create session with impact info and AI-generated message
+    // Create session with impact info and generated message
     _currentSession = SOSSession(
       id: _generateSessionId(),
       userId: userId,
@@ -992,10 +1095,10 @@ class SOSService {
     final currentUser = _userProfileService.currentProfile;
     final userId = currentUser?.id ?? 'anonymous_user';
 
-    // Generate AI-powered fall description based on impact data
+    // Generate fall description based on impact data
     final fallMessage = _generateFallMessage(impactInfo);
 
-    // Create session with impact info and AI-generated message
+    // Create session with impact info and generated message
     _currentSession = SOSSession(
       id: _generateSessionId(),
       userId: userId,
@@ -1018,12 +1121,12 @@ class SOSService {
     } catch (_) {}
   }
 
-  /// Generate AI-powered crash description based on impact data
+  /// Generate a crash description based on impact data
   String _generateCrashMessage(ImpactInfo impactInfo) {
     final magnitude = impactInfo.accelerationMagnitude;
     final severity = impactInfo.severity;
 
-    // AI logic to determine crash severity and type
+    // Heuristic logic to determine crash severity and type
     if (severity == ImpactSeverity.critical || magnitude > 40.0) {
       // Severe high-speed crash
       return 'SEVERE CRASH DETECTED: High-speed collision detected (${magnitude.toStringAsFixed(1)}g force). Major impact detected. Possible severe injuries. IMMEDIATE emergency response required. Airbags likely deployed.';
@@ -1039,13 +1142,13 @@ class SOSService {
     }
   }
 
-  /// Generate AI-powered fall description based on impact data
+  /// Generate a fall description based on impact data
   String _generateFallMessage(ImpactInfo impactInfo) {
     final magnitude = impactInfo.accelerationMagnitude;
     final severity = impactInfo.severity;
     final verificationReason = impactInfo.verificationReason;
 
-    // AI logic to determine fall severity and context
+    // Heuristic logic to determine fall severity and context
     if (severity == ImpactSeverity.critical || magnitude > 30.0) {
       // Critical fall - high risk
       String message =
@@ -1107,31 +1210,6 @@ class SOSService {
       _onSessionUpdated?.call(_currentSession!);
     } catch (e) {
       debugPrint('SOSService: Error sending emergency alerts - $e');
-    }
-  }
-
-  /// Send detailed SOS message to chat channels with user identification
-  Future<void> _sendSOSChatMessage() async {
-    if (_currentSession == null) return;
-
-    try {
-      final userProfile = _userProfileService.currentProfile;
-
-      // Generate user-friendly emergency message
-      final messageContent = userProfile?.name.isNotEmpty == true
-          ? 'Emergency assistance needed for ${userProfile!.name}'
-          : 'Emergency assistance needed';
-
-      // Send to chat service with full user details
-      await _chatService.sendSOSMessage(
-        session: _currentSession!,
-        content: messageContent,
-        location: _currentSession!.location,
-      );
-
-      debugPrint('SOSService: Detailed SOS message sent to chat channels');
-    } catch (e) {
-      debugPrint('SOSService: Error sending SOS chat message - $e');
     }
   }
 
@@ -1763,7 +1841,7 @@ class SOSService {
         'User interaction recorded for session $sessionId',
         tag: 'SOSService',
       );
-      // AI monitoring removed - user interaction tracked via SOS status updates
+      // User interaction tracked via SOS status updates
     } catch (e) {
       AppLogger.e(
         'Failed to record user interaction',
@@ -1780,6 +1858,6 @@ class SOSService {
     _sensorService.dispose();
     _locationService.dispose();
     _rescueResponseService.dispose();
-    // AI emergency call service removed
+    // Auto-call service removed
   }
 }

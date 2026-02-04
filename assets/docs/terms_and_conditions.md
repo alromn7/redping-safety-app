@@ -9,7 +9,9 @@ By downloading, installing, or using the REDP!NG Safety App ("App"), you agree t
 
 ## 2. DESCRIPTION OF SERVICE
 
-REDP!NG is a comprehensive safety and emergency response application that provides:
+REDP!NG is an **advanced safety communication platform** designed to rapidly connect people in distress to emergency services and rescue teams in the quickest way possible—eliminating the struggle of explaining emergencies during critical accident events. 
+
+**Important Clarification**: REDP!NG does NOT own, operate, or employ emergency services, rescue teams, or first responders. We are a communication intermediary that facilitates rapid connection between users in distress and existing emergency response infrastructure.
 
 ### 2.1 Core Safety Features
 - **SOS Emergency Services**: Automated emergency response with location tracking
@@ -84,11 +86,12 @@ REDP!NG is a comprehensive safety and emergency response application that provid
 
 ## 4. USER RESPONSIBILITIES
 
-### 4.1 Emergency Response
-- **Not a Substitute**: This app does not replace traditional emergency services (911, etc.)
-- **False Alarms**: Users are responsible for any costs associated with false emergency responses
-- **Verification**: Always verify emergency situations before relying solely on app notifications
-- **Backup Plans**: Maintain alternative emergency communication methods
+### 4.1 Emergency Communication
+- **Not Emergency Services Provider**: REDP!NG is a communication platform, NOT an emergency services provider or rescue team operator
+- **Our Role**: We facilitate rapid communication of your emergency location and status to appropriate emergency services
+- **Their Role**: Actual emergency response is handled by local emergency services, first responders, and SAR teams
+- **Third-Party Responsibility**: Emergency response quality and timing depend on third-party emergency services beyond our control
+- **Your Responsibility**: Always call traditional emergency services (911, 112, 999) directly when possible as your primary method
 
 ### 4.2 Device Maintenance
 - **Updates**: Keep the app and device OS updated for optimal performance
@@ -143,7 +146,18 @@ REDP!NG is a comprehensive safety and emergency response application that provid
 
 ## 7. DISCLAIMERS
 
-### 7.1 Service Availability
+## 7.4 Third-Party Emergency Services Disclaimer
+
+REDP!NG operates as a communication intermediary only:
+- **We are NOT**: Emergency service providers, first responders, rescue teams, or emergency dispatchers
+- **We DO NOT**: Employ, own, or operate ambulances, fire trucks, police, rescue helicopters, or any emergency response personnel
+- **We DO NOT**: Control emergency service response times, availability, or resource allocation
+- **We FACILITATE**: Rapid, automated communication of your emergency location and status to appropriate emergency services
+- **We DEPEND ON**: The professionalism, capability, and availability of local emergency services and SAR organizations
+- **Your Real Safety**: Depends on the emergency infrastructure of your geographic location, not on REDP!NG
+- **Our Advantage**: We reduce communication delays during critical accident moments by automatically sharing your location
+
+## 7.5 Service Availability
 - **No Guarantee**: We do not guarantee continuous, uninterrupted service availability
 - **Maintenance**: Service may be temporarily unavailable for maintenance
 - **Force Majeure**: Not liable for service interruptions due to circumstances beyond our control
@@ -154,13 +168,17 @@ REDP!NG is a comprehensive safety and emergency response application that provid
 - **Network Delays**: Real-time features subject to network latency
 - **Third-Party Services**: Dependent on third-party service reliability
 
-### 7.3 Emergency Response
-- **Not Emergency Services**: App does not replace professional emergency services (911/112/999)
+### 7.3 Emergency Response and Communication
+- **Communication Tool, Not Rescue Provider**: REDP!NG is a rapid communication platform designed to quickly notify emergency services of your location and status. We do not provide emergency response, rescue operations, or medical services.
+- **Facilitator Role**: We connect you to emergency services; we do not control their response, availability, or effectiveness
+- **Third-Party Dependency**: Actual rescue and emergency response are entirely dependent on the availability, capability, and response time of local emergency services and SAR organizations
+- **Not Emergency Services**: We are not 911, first responders, emergency dispatchers, or rescue teams. We facilitate communication to them.
 - **No Automated Calling**: App cannot automatically dial emergency services due to platform restrictions
-- **SMS-Based Alerts**: Emergency response relies on SMS notifications to designated contacts
-- **Response Times**: No guarantee of emergency contact response times
+- **Communication Advantage**: Our core benefit is reducing the time spent explaining your emergency by automatically transmitting your location and status—critical seconds saved during accidents
+- **SMS-Based Alerts**: Emergency communication relies on SMS notifications to designated contacts
+- **Response Times**: No guarantee of emergency contact response times or emergency service availability
 - **Manual Action Required**: Emergency contacts must manually call emergency services on behalf of user
-- **Coverage Areas**: SMS delivery depends on cellular network coverage
+- **Coverage Areas**: Communication depends on cellular network coverage
 - **Communication Failures**: Emergency communications may fail due to network issues or technical problems
 
 ## 8. LIMITATION OF LIABILITY

@@ -46,8 +46,8 @@ class _ServicesNetworkTestPageState extends State<ServicesNetworkTestPage> {
       // Test location services
       await _testLocationServices();
 
-      // Test AI services
-      await _testAIServices();
+      // Test help services
+      await _testHelpServices();
 
       // Test SAR services
       await _testSARServices();
@@ -148,32 +148,18 @@ class _ServicesNetworkTestPageState extends State<ServicesNetworkTestPage> {
     }
   }
 
-  Future<void> _testAIServices() async {
-    _addTestResult('🤖 AI SERVICES TEST');
+  Future<void> _testHelpServices() async {
+    _addTestResult('🧭 HELP SERVICES TEST');
     _addTestResult('-' * 30);
 
     try {
-      // Test AI Assistant Service
-      await _serviceManager.aiAssistantService.initialize();
-      _addTestResult('✅ AI Assistant: AI APIs + Local Processing');
-
-      // Test AI Verification Service (if available)
-      try {
-        // Note: AI Verification Service not available in current AppServiceManager
-        _addTestResult(
-          '⚠️ AI Verification: Service not available in current setup',
-        );
-      } catch (e) {
-        _addTestResult('⚠️ AI Verification: Service not available');
-      }
-
       // Test Help Assistant Service
       await _serviceManager.helpAssistantService.initialize();
       _addTestResult('✅ Help Assistant: Knowledge Base + Context');
 
       _addTestResult('');
     } catch (e) {
-      _addTestResult('❌ AI services test failed: $e');
+      _addTestResult('❌ Help services test failed: $e');
     }
   }
 
@@ -278,9 +264,7 @@ class _ServicesNetworkTestPageState extends State<ServicesNetworkTestPage> {
       );
 
       // Test external APIs
-      _addTestResult(
-        '✅ External APIs: Geocoding + Satellite + AI + SAR Networks',
-      );
+      _addTestResult('✅ External APIs: Geocoding + Satellite + SAR Networks');
 
       _addTestResult('');
     } catch (e) {
@@ -418,8 +402,8 @@ class _ServicesNetworkTestPageState extends State<ServicesNetworkTestPage> {
                             _analysisResults['location_services'],
                           ),
                           _buildAnalysisSection(
-                            'AI Services',
-                            _analysisResults['ai_services'],
+                            'Help Services',
+                            _analysisResults['help_services'],
                           ),
                           _buildAnalysisSection(
                             'SAR Services',

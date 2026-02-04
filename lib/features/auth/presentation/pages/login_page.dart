@@ -6,6 +6,8 @@ import '../../../../core/theme/app_theme.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/app_service_manager.dart';
+import '../../../../services/connectivity_monitor_service.dart';
+import '../../../../core/app/app_launch_config.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -78,7 +80,7 @@ class _LoginPageState extends State<LoginPage> {
         );
 
         // Navigate directly to main dashboard
-        context.go('/main');
+        context.go(AppLaunchConfig.homeRoute);
       }
     } on AuthException catch (e) {
       if (mounted) {
@@ -185,7 +187,7 @@ class _LoginPageState extends State<LoginPage> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('✅ Signed in with Google')),
           );
-          context.go('/main');
+          context.go(AppLaunchConfig.homeRoute);
         }
       }
     } catch (e) {
@@ -427,12 +429,9 @@ class _LoginPageState extends State<LoginPage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         // Google Logo - increased by 75% (20 -> 35)
-                        Image.network(
-                          'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
-                          height: 35,
-                          width: 35,
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) {
+                        () {
+                          final offline = ConnectivityMonitorService().isEffectivelyOffline;
+                          if (offline) {
                             return Container(
                               height: 35,
                               width: 35,
@@ -446,8 +445,29 @@ class _LoginPageState extends State<LoginPage> {
                                 color: Color(0xFF4285F4),
                               ),
                             );
-                          },
-                        ),
+                          }
+                          return Image.network(
+                            'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
+                            height: 35,
+                            width: 35,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                height: 35,
+                                width: 35,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: const Icon(
+                                  Icons.g_mobiledata,
+                                  size: 35,
+                                  color: Color(0xFF4285F4),
+                                ),
+                              );
+                            },
+                          );
+                        }(),
                         const SizedBox(width: 24),
                         const Text(
                           'Continue with Google',

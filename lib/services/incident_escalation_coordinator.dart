@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/sos_session.dart';
-import '../models/verification_result.dart';
+import '../models/detection_context.dart';
 import 'sos_service.dart';
 import 'sos_analytics_service.dart';
 
-/// Coordinator to unify incident escalation flows across detection and verification.
-/// Phase 1: Focus on post-verification fallback (2-minute) for no-response/uncertain outcomes.
+/// Coordinator to unify incident escalation flows across detection windows and
+/// heuristic-based fallback escalation.
 class IncidentEscalationCoordinator {
   IncidentEscalationCoordinator._internal();
   static final IncidentEscalationCoordinator instance =
@@ -18,7 +18,6 @@ class IncidentEscalationCoordinator {
   // State
   CoordinatorState _state = CoordinatorState.idle;
   Timer? _fallbackTimer;
-  VerificationResult? _lastResult;
   DetectionContext? _lastDetectionContext;
 
   // Config
@@ -43,13 +42,12 @@ class IncidentEscalationCoordinator {
   void reset() {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
-    _lastResult = null;
     _lastDetectionContext = null;
     _updateState(CoordinatorState.idle);
   }
 
   /// Notify coordinator that a detection window has started (pre-verification).
-  /// This enables UI/analytics to reflect the detection phase before AI completes.
+  /// This enables UI/analytics to reflect the detection phase before escalation completes.
   void detectionWindowStarted(DetectionContext context) {
     _lastDetectionContext = context;
     _updateState(CoordinatorState.detectionWindow);
@@ -58,53 +56,16 @@ class IncidentEscalationCoordinator {
     );
   }
 
-  /// Notify coordinator that a verification result has been produced.
-  /// Only acts on fallback‑eligible outcomes to avoid duplicating existing SOS triggers.
-  void handleVerificationResult(VerificationResult result) {
-    _lastResult = result;
-
-    // Analytics: verification outcome with latency from detection start
-    try {
-      final detTs =
-          _lastDetectionContext?.timestamp ?? result.context.timestamp;
-      final latency = DateTime.now().difference(detTs);
-      SOSAnalyticsService.instance.logVerificationOutcomeEvent(
-        type: result.context.type,
-        outcome: result.outcome,
-        confidence: result.confidence,
-        latency: latency,
-      );
-    } catch (_) {}
-
-    // If verification already requires SOS, let existing pipeline proceed (no duplication).
-    if (result.requiresSOS) {
-      debugPrint(
-        'Coordinator: verification requires SOS - deferring to existing flow',
-      );
-      _updateState(CoordinatorState.sosCountdown);
-      return;
-    }
-
-    // Fallback cases: noResponse or uncertain → start 2‑minute timer
-    if (result.outcome == VerificationOutcome.noResponse ||
-        result.outcome == VerificationOutcome.uncertainIncident) {
-      _startFallbackTimer(
-        reasonCode: result.outcome == VerificationOutcome.noResponse
-            ? 'Fallback_NoResponse'
-            : 'Fallback_Uncertain',
-      );
-      return;
-    }
-
-    // False alarm / user OK → ensure any pending fallback is cancelled
-    if (result.outcome == VerificationOutcome.falseAlarmDetected ||
-        result.outcome == VerificationOutcome.userConfirmedOK) {
-      cancelFallback();
-      _updateState(CoordinatorState.falseAlarm);
-      return;
-    }
-
-    // Genuine incident covered above by requiresSOS
+  /// Schedule a heuristic fallback timer.
+  ///
+  /// Use this when a detection window begins and the app expects user response,
+  /// but wants to auto-escalate if no interaction occurs within the fallback window.
+  void scheduleFallback({
+    required DetectionContext context,
+    required String reasonCode,
+  }) {
+    _lastDetectionContext = context;
+    _startFallbackTimer(context: context, reasonCode: reasonCode);
   }
 
   /// Cancel any pending fallback (e.g., user interaction or motion resume)
@@ -115,10 +76,19 @@ class IncidentEscalationCoordinator {
       onFallbackCancelled?.call();
       debugPrint('Coordinator: Fallback cancelled');
     }
-    // Do not reset state to idle here to preserve timeline; move to falseAlarm/cancelled via handleVerificationResult
+    // Do not reset state to idle here to preserve timeline.
   }
 
-  void _startFallbackTimer({required String reasonCode}) {
+  /// Mark the current timeline as a false alarm (cancels any pending fallback).
+  void markFalseAlarm() {
+    cancelFallback();
+    _updateState(CoordinatorState.falseAlarm);
+  }
+
+  void _startFallbackTimer({
+    required DetectionContext context,
+    required String reasonCode,
+  }) {
     // If there is an existing timer, restart it
     _fallbackTimer?.cancel();
     _updateState(CoordinatorState.fallbackPending);
@@ -130,10 +100,7 @@ class IncidentEscalationCoordinator {
 
     // Analytics: fallback scheduled
     try {
-      final dType =
-          _lastResult?.context.type ??
-          _lastDetectionContext?.type ??
-          DetectionType.crash;
+      final dType = context.type;
       SOSAnalyticsService.instance.logFallbackTriggered(
         type: dType,
         reasonCode: reasonCode,
@@ -144,9 +111,7 @@ class IncidentEscalationCoordinator {
     _fallbackTimer = Timer(_fallbackWindow, () async {
       // If no cancellation occurred, escalate via SOS countdown
       try {
-        final type = _mapType(
-          _lastResult?.context.type ?? _lastDetectionContext?.type,
-        );
+        final type = _mapType(_lastDetectionContext?.type ?? context.type);
         if (startSOSOverride != null) {
           await startSOSOverride!(
             type: type,
@@ -214,8 +179,6 @@ class IncidentEscalationCoordinator {
 enum CoordinatorState {
   idle,
   detectionWindow,
-  verification,
-  awaitUserResponse,
   fallbackPending,
   sosCountdown,
   sosActive,

@@ -10,11 +10,9 @@ class EnvKeys {
   static const String projectId = 'PROJECT_ID';
   static const String apiKey = 'API_KEY';
   static const String clientId = 'CLIENT_ID';
-  // AI/LLM
-  static const String openaiBaseUrl = 'OPENAI_BASE_URL';
-  static const String openaiModel = 'OPENAI_MODEL';
-  static const String openaiApiKey = 'OPENAI_API_KEY';
-  // Gemini
-  static const String geminiApiKey = 'GEMINI_API_KEY';
-  static const String geminiModel = 'GEMINI_MODEL';
+
+  // Magic Link / Passwordless auth
+  static const String magicLinkContinueUrl = 'MAGIC_LINK_CONTINUE_URL';
+  static const String androidPackageName = 'ANDROID_PACKAGE_NAME';
+  static const String iosBundleId = 'IOS_BUNDLE_ID';
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../models/user_profile.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../config/google_cloud_config.dart';
@@ -65,10 +66,24 @@ class UserProfileService {
   }
 
   Future<void> updateProfile(UserProfile profile) async {
+    debugPrint('UserProfileService.updateProfile called');
+    debugPrint('  _useFirestore: $_useFirestore');
+    debugPrint('  isAuthenticated: ${AuthService.instance.isAuthenticated}');
+
     _currentProfile = profile;
+    debugPrint('  Local profile updated');
+
     if (_useFirestore && AuthService.instance.isAuthenticated) {
+      debugPrint('  Attempting to save to Firestore...');
       await _saveToFirestore(profile);
+      debugPrint('  Firestore save completed');
+    } else if (_useFirestore && !AuthService.instance.isAuthenticated) {
+      debugPrint('  ERROR: Not authenticated');
+      throw Exception('User must be authenticated to save profile');
+    } else {
+      debugPrint('  Skipping Firestore save (useFirestore: $_useFirestore)');
     }
+    debugPrint('UserProfileService.updateProfile finished');
   }
 
   bool isProfileReadyForEmergency() {
@@ -121,7 +136,23 @@ class UserProfileService {
     final docRef = FirebaseFirestore.instance
         .collection(GoogleCloudConfig.firestoreCollectionUsers)
         .doc(userId);
-    await docRef.set(profile.toJson(), SetOptions(merge: true));
+
+    try {
+      // Add timeout to prevent hanging when offline
+      await docRef
+          .set(profile.toJson(), SetOptions(merge: true))
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              debugPrint('Profile save to Firestore timed out (offline mode)');
+              // Profile is already saved locally in _currentProfile
+              return;
+            },
+          );
+    } catch (e) {
+      debugPrint('Error saving profile to Firestore: $e');
+      // Profile is already saved locally, so we can continue
+    }
   }
 
   String _coerceToIsoString(dynamic value) {

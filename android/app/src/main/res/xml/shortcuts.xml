@@ -1,6 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- RedPing safety voice shortcuts for Google Assistant -->
+    
+    <!-- App Shortcuts for Google Assistant - "Hey Google, start SOS in RedPing" -->
+    
+    <!-- Emergency SOS - Highest priority -->
+    <shortcut
+        android:shortcutId="start_sos"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_sos_short"
+        android:shortcutLongLabel="@string/shortcut_sos_long"
+        android:shortcutDisabledMessage="@string/shortcut_disabled">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity"
+            android:data="redping://sos?action=start&amp;source=assistant" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- Cancel SOS -->
+    <shortcut
+        android:shortcutId="cancel_sos"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_cancel_short"
+        android:shortcutLongLabel="@string/shortcut_cancel_long"
+        android:shortcutDisabledMessage="@string/shortcut_disabled">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity"
+            android:data="redping://sos?action=cancel&amp;source=assistant" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- Share Location -->
+    <shortcut
+        android:shortcutId="share_location"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_location_short"
+        android:shortcutLongLabel="@string/shortcut_location_long"
+        android:shortcutDisabledMessage="@string/shortcut_disabled">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity"
+            android:data="redping://location?action=share&amp;source=assistant" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- Check Safety Status -->
+    <shortcut
+        android:shortcutId="safety_status"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_status_short"
+        android:shortcutLongLabel="@string/shortcut_status_long"
+        android:shortcutDisabledMessage="@string/shortcut_disabled">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.redping.redping"
+            android:targetClass="com.redping.redping.MainActivity"
+            android:data="redping://status?source=assistant" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    
+    <!-- Legacy App Actions / Google Assistant voice commands (capabilities) -->
+    
     <capability android:name="actions.intent.GET_THING">
         <intent
             android:action="android.intent.action.VIEW"

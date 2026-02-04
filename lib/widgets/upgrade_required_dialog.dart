@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/subscription_tier.dart';
-import '../services/subscription_service.dart';
-import '../features/subscription/presentation/pages/subscription_plans_page.dart';
 import '../core/theme/app_theme.dart';
 
 /// Dialog shown when user tries to access a premium feature
@@ -23,10 +21,6 @@ class UpgradeRequiredDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final requiredPlan = requiredTier != null
-        ? SubscriptionService.instance.getPlanByTier(requiredTier!)
-        : null;
-
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: Row(
@@ -69,48 +63,10 @@ class UpgradeRequiredDialog extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          if (requiredPlan != null) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: _getTierColor().withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _getTierColor().withValues(alpha: 0.3),
-                  width: 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(_getTierIcon(), color: _getTierColor(), size: 20),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${requiredPlan.name} Plan',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: _getTierColor(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Starting at \$${requiredPlan.monthlyPrice.toStringAsFixed(2)}/month',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.primaryText,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
+          Text(
+            'Subscriptions have been removed; all features are available.',
+            style: TextStyle(color: AppTheme.secondaryText, fontSize: 13),
+          ),
           if (benefits.isNotEmpty) ...[
             Text(
               'This upgrade includes:',
@@ -172,8 +128,6 @@ class UpgradeRequiredDialog extends StatelessWidget {
             Navigator.of(context).pop(true);
             if (onUpgradePressed != null) {
               onUpgradePressed!();
-            } else {
-              _showSubscriptionPlans(context);
             }
           },
           style: ElevatedButton.styleFrom(
@@ -185,7 +139,7 @@ class UpgradeRequiredDialog extends StatelessWidget {
             ),
           ),
           child: const Text(
-            'Upgrade Now',
+            'OK',
             style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
           ),
         ),
@@ -227,12 +181,6 @@ class UpgradeRequiredDialog extends StatelessWidget {
     }
   }
 
-  void _showSubscriptionPlans(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const SubscriptionPlansPage()),
-    );
-  }
-
   /// Static method to show upgrade dialog for a specific feature
   static Future<bool?> show(
     BuildContext context, {
@@ -247,11 +195,6 @@ class UpgradeRequiredDialog extends StatelessWidget {
 
   /// Show upgrade dialog for REDP!NG Help feature
   static Future<bool?> showForRedpingHelp(BuildContext context) {
-    return Future.value(false);
-  }
-
-  /// Show upgrade dialog for AI Assistant feature
-  static Future<bool?> showForAIAssistant(BuildContext context) {
     return Future.value(false);
   }
 

@@ -4,12 +4,10 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:geocoding/geocoding.dart';
 import '../core/constants/app_constants.dart';
 import '../models/emergency_contact.dart';
 import '../models/sos_session.dart';
 import 'user_profile_service.dart';
-import 'location_service.dart';
 
 /// Service for managing emergency contacts and sending alerts
 class EmergencyContactsService {
@@ -37,7 +35,12 @@ class EmergencyContactsService {
       await _loadContacts();
       await _loadAlertLogs();
 
-      // Add default emergency services contact if none exist
+      // Safety policy: the app does NOT contact national emergency services.
+      // Any emergency-services entries (if present) are excluded from alerts
+      // and from `enabledContacts`. Manual emergency hotline dialing is handled
+      // by UI (separate from contacts).
+
+      // Add default placeholder contacts if none exist
       if (_contacts.isEmpty) {
         await _addDefaultContacts();
       }
@@ -133,113 +136,13 @@ class EmergencyContactsService {
   /// Add default emergency contacts
   Future<void> _addDefaultContacts() async {
     final now = DateTime.now();
-
-    // Auto-detect user's location and get appropriate emergency number
-    String emergencyNumber = '911'; // Default fallback
-    String emergencyName = 'Emergency Services';
-    String emergencyNotes = 'Local emergency services';
-
-    try {
-      // Try to get user's current location
-      final position = await LocationService.getCurrentLocationStatic();
-
-      // Get country from coordinates using reverse geocoding
-      final placemarks = await placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
-
-      if (placemarks.isNotEmpty) {
-        final countryCode = placemarks.first.isoCountryCode?.toUpperCase();
-
-        // Map country codes to emergency numbers
-        final emergencyNumbers = {
-          'US': {'number': '911', 'name': 'US Emergency Services'},
-          'CA': {'number': '911', 'name': 'Canada Emergency Services'},
-          'MX': {'number': '911', 'name': 'Mexico Emergency Services'},
-          'AU': {'number': '000', 'name': 'Australia Emergency Services'},
-          'NZ': {'number': '111', 'name': 'New Zealand Emergency Services'},
-          'GB': {'number': '999', 'name': 'UK Emergency Services'},
-          'IE': {'number': '112', 'name': 'Ireland Emergency Services'},
-          'IN': {'number': '112', 'name': 'India Emergency Services'},
-          'ZA': {'number': '10111', 'name': 'South Africa Police'},
-          'JP': {'number': '119', 'name': 'Japan Emergency Services'},
-          'CN': {'number': '120', 'name': 'China Medical Emergency'},
-          'KR': {'number': '119', 'name': 'South Korea Emergency'},
-          'BR': {'number': '192', 'name': 'Brazil Medical Emergency'},
-          'AR': {'number': '107', 'name': 'Argentina Medical Emergency'},
-          'FR': {'number': '112', 'name': 'France Emergency Services'},
-          'DE': {'number': '112', 'name': 'Germany Emergency Services'},
-          'IT': {'number': '112', 'name': 'Italy Emergency Services'},
-          'ES': {'number': '112', 'name': 'Spain Emergency Services'},
-          'NL': {'number': '112', 'name': 'Netherlands Emergency Services'},
-          'SE': {'number': '112', 'name': 'Sweden Emergency Services'},
-          'NO': {'number': '112', 'name': 'Norway Emergency Services'},
-          'DK': {'number': '112', 'name': 'Denmark Emergency Services'},
-          'FI': {'number': '112', 'name': 'Finland Emergency Services'},
-          'PL': {'number': '112', 'name': 'Poland Emergency Services'},
-          'RU': {'number': '112', 'name': 'Russia Emergency Services'},
-          'TR': {'number': '112', 'name': 'Turkey Emergency Services'},
-          'SA': {'number': '997', 'name': 'Saudi Arabia Emergency'},
-          'AE': {'number': '999', 'name': 'UAE Emergency Services'},
-          'SG': {'number': '995', 'name': 'Singapore Ambulance'},
-          'MY': {'number': '999', 'name': 'Malaysia Emergency Services'},
-          'TH': {'number': '191', 'name': 'Thailand Emergency Services'},
-          'VN': {'number': '115', 'name': 'Vietnam Medical Emergency'},
-          'PH': {'number': '911', 'name': 'Philippines Emergency'},
-          'ID': {'number': '112', 'name': 'Indonesia Emergency Services'},
-          'EG': {'number': '123', 'name': 'Egypt Ambulance'},
-          'NG': {'number': '112', 'name': 'Nigeria Emergency Services'},
-        };
-
-        if (countryCode != null && emergencyNumbers.containsKey(countryCode)) {
-          emergencyNumber = emergencyNumbers[countryCode]!['number']!;
-          emergencyName = emergencyNumbers[countryCode]!['name']!;
-          emergencyNotes = 'Local emergency services ($emergencyNumber)';
-
-          if (kDebugMode) {
-            print(
-              'EmergencyContactsService: Detected country $countryCode, using emergency number $emergencyNumber',
-            );
-          }
-        } else {
-          // Default to 112 (works in most of Europe and many other countries)
-          emergencyNumber = '112';
-          emergencyName = 'Emergency Services';
-          emergencyNotes = 'International emergency number (112)';
-          if (kDebugMode) {
-            print(
-              'EmergencyContactsService: Country $countryCode not in database, defaulting to 112',
-            );
-          }
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print(
-          'EmergencyContactsService: Could not auto-detect location, using default 911: $e',
-        );
-      }
-    }
-
     final defaultContacts = [
-      EmergencyContact(
-        id: _generateId(),
-        name: emergencyName,
-        phoneNumber: emergencyNumber,
-        type: ContactType.emergencyServices,
-        priority: 1,
-        relationship: 'Emergency Services',
-        notes: emergencyNotes,
-        createdAt: now,
-        updatedAt: now,
-      ),
       EmergencyContact(
         id: _generateId(),
         name: 'Emergency Contact 1',
         phoneNumber: '',
         type: ContactType.family,
-        priority: 2,
+        priority: 1,
         relationship: 'Family',
         notes: 'Add your primary emergency contact',
         isEnabled: false, // Disabled until user adds real info
@@ -251,7 +154,7 @@ class EmergencyContactsService {
         name: 'Emergency Contact 2',
         phoneNumber: '',
         type: ContactType.friend,
-        priority: 3,
+        priority: 2,
         relationship: 'Friend',
         notes: 'Add your secondary emergency contact',
         isEnabled: false, // Disabled until user adds real info
@@ -273,6 +176,11 @@ class EmergencyContactsService {
     String? relationship,
     String? notes,
   }) async {
+    if (type == ContactType.emergencyServices) {
+      throw Exception(
+        'Emergency services cannot be added as a contact. Use Emergency Hotline for manual dialing.',
+      );
+    }
     final now = DateTime.now();
     final newPriority = _contacts.isEmpty ? 1 : _contacts.length + 1;
 
@@ -302,6 +210,11 @@ class EmergencyContactsService {
     String contactId,
     EmergencyContact updatedContact,
   ) async {
+    if (updatedContact.type == ContactType.emergencyServices) {
+      throw Exception(
+        'Emergency services cannot be saved as an emergency contact. Use Emergency Hotline for manual dialing.',
+      );
+    }
     final index = _contacts.indexWhere((c) => c.id == contactId);
     if (index == -1) {
       throw Exception('Contact not found');
@@ -355,7 +268,9 @@ class EmergencyContactsService {
 
   /// Send emergency alerts to all enabled contacts
   Future<List<ContactAlertLog>> sendEmergencyAlerts(SOSSession session) async {
-    final enabledContacts = _contacts.where((c) => c.isEnabled).toList();
+    final enabledContacts = _contacts
+        .where((c) => c.isEnabled && c.type != ContactType.emergencyServices)
+        .toList();
     final alertLogs = <ContactAlertLog>[];
 
     debugPrint(
@@ -430,7 +345,8 @@ class EmergencyContactsService {
 
   /// Open SMS composer with pre-filled SOS contents to all enabled contacts (best-effort)
   Future<void> openSMSComposerForEnabledContacts(SOSSession session) async {
-    for (final contact in _contacts.where((c) => c.isEnabled)) {
+    for (final contact in _contacts
+        .where((c) => c.isEnabled && c.type != ContactType.emergencyServices)) {
       if (contact.phoneNumber.isEmpty) continue;
       final msg = _generateAlertMessage(session);
       final smsUri = Uri(
@@ -649,6 +565,13 @@ class EmergencyContactsService {
     return buffer.toString();
   }
 
+  /// Public helper to build the SOS alert message for sharing.
+  ///
+  /// Note: This does not send anything by itself; it only builds the text.
+  String buildEmergencyAlertMessage(SOSSession session) {
+    return _generateAlertMessage(session);
+  }
+
   /// Get display name for SOS type
   String _getSOSTypeDisplayName(SOSType type) {
     switch (type) {
@@ -703,8 +626,11 @@ class EmergencyContactsService {
   bool get isInitialized => _isInitialized;
   List<EmergencyContact> get contacts => List.unmodifiable(_contacts);
   List<EmergencyContact> get enabledContacts =>
-      _contacts.where((c) => c.isEnabled).toList();
+      _contacts
+          .where((c) => c.isEnabled && c.type != ContactType.emergencyServices)
+          .toList();
   List<ContactAlertLog> get alertLogs => List.unmodifiable(_alertLogs);
+
 
   // Event handlers
   void setContactsChangedCallback(Function(List<EmergencyContact>) callback) {

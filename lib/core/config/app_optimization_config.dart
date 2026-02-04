@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+// import 'package:firebase_crashlytics/firebase_crashlytics.dart';  // REMOVED: Phase 2
 
 /// Production-ready app optimization configuration
 class AppOptimizationConfig {
@@ -55,12 +55,16 @@ class AppOptimizationConfig {
   }
 
   static void _setupProductionErrorHandling() {
-    // Forward all Flutter framework errors to Crashlytics
-    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterError;
+    // Phase 2: Crashlytics removed - errors logged to console only
+    FlutterError.onError = (details) {
+      debugPrint('Flutter Error: ${details.exception}');
+      debugPrint('Stack: ${details.stack}');
+    };
 
     // Also capture any asynchronous errors
     PlatformDispatcher.instance.onError = (error, stack) {
-      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      debugPrint('Async Error: $error');
+      debugPrint('Stack: $stack');
       return true; // handled
     };
   }

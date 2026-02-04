@@ -1,48 +1,47 @@
 // ignore_for_file: use_build_context_synchronously
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/theme/app_theme.dart';
+import 'package:redping_14v/utils/activity_classifier.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/routing/app_router.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../services/app_service_manager.dart';
 import '../../../../services/location_service.dart';
+import '../../../../services/connectivity_monitor_service.dart';
 import '../../../../services/sms_service.dart';
 import '../../../../models/sos_session.dart' hide MessageType;
 import '../../../../models/emergency_contact.dart';
 import '../../../../models/redping_mode.dart';
 import '../../../../models/hazard_alert.dart';
 import '../../../../widgets/auth_status_widget.dart';
-import '../../../../widgets/subscription_upgrade_dialog.dart';
-import '../../../../services/subscription_access_controller.dart';
 import '../widgets/user_identification_card.dart';
 import '../widgets/rescue_response_widget.dart';
 import '../widgets/sos_status_tracker.dart';
-import '../widgets/verification_dialog.dart';
-import '../../../../models/verification_result.dart';
 // import '../widgets/sos_messaging_widget.dart'; // Removed: messaging UI removed
 import '../widgets/redping_logo_button.dart';
 import '../widgets/sensor_data_display.dart';
 import '../widgets/active_mode_dashboard.dart';
+import '../widgets/emergency_hotline_card.dart';
 // Removed old inline test widget in favor of a comprehensive test page
 import 'redping_mode_selection_page.dart';
-import 'sos_chat_page.dart';
 import '../../../../services/redping_mode_service.dart';
-import '../../../ai/presentation/widgets/ai_assistant_card.dart';
 import '../../../gadgets/presentation/widgets/gadgets_management_card.dart';
-import 'comprehensive_redping_help_page.dart';
 import '../../../redping_mode/presentation/pages/family_mode_dashboard.dart';
+import '../../../../config/env.dart';
 import '../../../redping_mode/presentation/pages/group_activity_dashboard.dart';
 import '../../../redping_mode/presentation/pages/extreme_activity_dashboard.dart';
 import '../../../redping_mode/presentation/pages/travel_mode_dashboard.dart';
 import '../../../redping_mode/presentation/pages/work_mode_dashboard.dart';
-import '../../../../services/help_service.dart';
-import '../../../../models/help_category.dart';
-import '../../../../models/help_request.dart';
+import '../../../../services/offline_sos_queue_service.dart';
+import '../../../../services/emergency_contacts_service.dart';
 
 /// Main SOS page with emergency button and safety features
 class SOSPage extends StatefulWidget {
@@ -85,15 +84,76 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   bool _monitoringOn = false;
   String _monitoringMode = '—';
   String _monitoringSummary = '';
-  // Track whether the AI voice VerificationDialog is currently visible
-  bool _isVerificationDialogShowing = false;
-  // Cooldown to avoid repeatedly re-opening verification dialog
-  DateTime? _lastVerificationDialogTime;
-  static const Duration _verificationDialogCooldown = Duration(seconds: 60);
+  // Dev-only flight simulation controls
+  bool _devSimFlight = false;
+  double _devSimSpeedKmh = 280.0;
+  double _devSimAltitudeM = 9000.0;
   // Reactive updates for hazard alerts quick-access
   void _onHazardAlertsUpdated() {
     if (!mounted) return;
     setState(() {});
+  }
+
+  Future<void> _showEmergencyHotlineSheet() async {
+    final countryCode = Localizations.localeOf(context).countryCode;
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.darkSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: AppTheme.neutralGray.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'Emergency Hotline (Manual Dial)',
+                      style: TextStyle(
+                        color: AppTheme.primaryText,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'This opens your phone dialer so you can call local emergency services yourself. SOS alerts will notify your personal contacts separately.',
+                      style: TextStyle(
+                        color: AppTheme.secondaryText,
+                        fontSize: 12,
+                        height: 1.25,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  EmergencyHotlineCard(userCountryCode: countryCode),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -218,7 +278,6 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       // Always (re)register page callbacks once; services are globally initialized elsewhere
       _initializeServices();
       _startStatusRefreshTimer();
-      _setupVerificationCallbacks();
       _callbacksRegistered = true;
     }
 
@@ -233,6 +292,131 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
   void _startHeartbeat() {
     _heartbeatController.repeat(reverse: true);
+  }
+
+  Future<void> _applyDevFlightOverride({required bool enabled}) async {
+    try {
+      final ls = LocationService();
+      await ls.initialize();
+      if (enabled) {
+        await ls.startTracking();
+        ls.setDebugOverride(
+          enabled: true,
+          speedMps: _devSimSpeedKmh / 3.6,
+          altitudeM: _devSimAltitudeM,
+        );
+      } else {
+        ls.setDebugOverride(enabled: false);
+      }
+    } catch (e) {
+      debugPrint('Dev Flight Override error: $e');
+    }
+  }
+
+  void _openDevFlightSimulator() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        bool enabled = _devSimFlight;
+        double speed = _devSimSpeedKmh;
+        double alt = _devSimAltitudeM;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            void syncApply() {
+              setState(() {
+                _devSimFlight = enabled;
+                _devSimSpeedKmh = speed;
+                _devSimAltitudeM = alt;
+              });
+              _applyDevFlightOverride(enabled: enabled);
+            }
+
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.build_circle),
+                      SizedBox(width: 8),
+                      Text('Developer Flight Simulator',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    title: const Text('Simulate Flight'),
+                    subtitle: const Text('Overrides GPS speed/altitude in-app'),
+                    value: enabled,
+                    onChanged: (v) {
+                      setModalState(() => enabled = v);
+                      syncApply();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Opacity(
+                    opacity: enabled ? 1.0 : 0.5,
+                    child: IgnorePointer(
+                      ignoring: !enabled,
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Speed (km/h)'),
+                              Text(speed.toStringAsFixed(0)),
+                            ],
+                          ),
+                          Slider(
+                            min: 0,
+                            max: 1200,
+                            divisions: 120,
+                            value: speed,
+                            onChanged: (v) {
+                              setModalState(() => speed = v);
+                              syncApply();
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Altitude (m)'),
+                              Text(alt.toStringAsFixed(0)),
+                            ],
+                          ),
+                          Slider(
+                            min: 0,
+                            max: 12000,
+                            divisions: 120,
+                            value: alt,
+                            onChanged: (v) {
+                              setModalState(() => alt = v);
+                              syncApply();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Done'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _startStatusRefreshTimer() {
@@ -293,22 +477,12 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
         });
       }
 
-      // Check emergency readiness (only show once per session)
-      final readinessScore = _serviceManager.getEmergencyReadinessScore();
-      if (readinessScore < 0.7 &&
-          !_hasShownReadinessWarning &&
-          !_isDialogShowing) {
-        // Mark as shown to avoid duplicates, then show dialog after the current frame
-        _hasShownReadinessWarning = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          _showReadinessWarning(readinessScore);
-        });
-      } else if (readinessScore >= 0.7) {
-        // Reset the warning flag if readiness is now sufficient
-        _hasShownReadinessWarning = false;
-        _isDialogShowing = false;
-      }
+      // Check emergency readiness (only show once per page session).
+      // IMPORTANT: Service initialization happens in the background after UI start.
+      // If we compute readiness too early, it will always look low and spam users.
+      await _waitForReadinessInputs();
+      if (!mounted) return;
+      _checkAndMaybeShowReadinessWarning();
 
       debugPrint('SOS Page: Services connected successfully');
 
@@ -330,6 +504,33 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
           _allSystemsActive = false;
         });
       }
+    }
+  }
+
+  Future<void> _waitForReadinessInputs() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 8));
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      // AppServiceManager marks itself initialized after essential services are ready.
+      if (_serviceManager.isInitialized &&
+          _serviceManager.profileService.isInitialized &&
+          _serviceManager.contactsService.isInitialized) {
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+  }
+
+  void _checkAndMaybeShowReadinessWarning() {
+    final readinessScore = _serviceManager.getEmergencyReadinessScore();
+    if (readinessScore < 0.7 && !_hasShownReadinessWarning && !_isDialogShowing) {
+      _hasShownReadinessWarning = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showReadinessWarning(readinessScore);
+      });
+    } else if (readinessScore >= 0.7) {
+      _hasShownReadinessWarning = false;
+      _isDialogShowing = false;
     }
   }
 
@@ -446,121 +647,28 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
   /// Update monitoring status based on GPS speed from sensor display
   void _onGPSSpeedUpdate(double? speedKmh) {
-    if (speedKmh == null) {
+    _lastSpeedKmh = speedKmh;
+    _updateMonitoringFromSensors();
+  }
+
+  void _onAltitudeUpdate(double? altitudeM) {
+    _lastAltitudeM = altitudeM;
+    _updateMonitoringFromSensors();
+  }
+
+  double? _lastSpeedKmh;
+  double? _lastAltitudeM;
+
+  void _updateMonitoringFromSensors() {
+    final status = ActivityClassifier.classify(_lastSpeedKmh, _lastAltitudeM);
+    if (_monitoringMode != status.mode ||
+        _monitoringSummary != status.summary) {
       setState(() {
-        _monitoringMode = 'Idle';
-        _monitoringOn = true;
-      });
-      return;
-    }
-
-    // Determine activity based on speed
-    String newMode;
-    String newSummary = '';
-
-    if (speedKmh < 2) {
-      // Stationary
-      newMode = 'Idle';
-    } else if (speedKmh >= 2 && speedKmh < 8) {
-      // Walking speed (2-8 km/h)
-      newMode = 'Walking ${speedKmh.toStringAsFixed(0)} km/h';
-      newSummary = 'Walking detected';
-    } else if (speedKmh >= 8 && speedKmh < 25) {
-      // Running/Cycling (8-25 km/h)
-      newMode = 'Running/Cycling ${speedKmh.toStringAsFixed(0)} km/h';
-      newSummary = 'Fast movement detected';
-    } else if (speedKmh >= 25 && speedKmh < 100) {
-      // Driving car (25-100 km/h)
-      newMode = 'Driving ${speedKmh.toStringAsFixed(0)} km/h';
-      newSummary = 'Vehicle movement';
-    } else if (speedKmh >= 100 && speedKmh < 250) {
-      // High-speed vehicle or boat (100-250 km/h)
-      newMode = 'High-Speed ${speedKmh.toStringAsFixed(0)} km/h';
-      newSummary = 'Fast vehicle or boat detected';
-    } else {
-      // Flying (250+ km/h)
-      newMode = 'Flying ${speedKmh.toStringAsFixed(0)} km/h';
-      newSummary = 'Airplane mode detected';
-    }
-
-    if (_monitoringMode != newMode) {
-      setState(() {
-        _monitoringMode = newMode;
-        _monitoringSummary = newSummary;
+        _monitoringMode = status.mode;
+        _monitoringSummary = status.summary;
         _monitoringOn = true;
       });
     }
-  }
-
-  /// Setup verification callbacks for AI detection
-  void _setupVerificationCallbacks() {
-    try {
-      _serviceManager.sensorService.setVerificationNeededCallback(
-        _showVerificationDialog,
-      );
-      debugPrint('SOS Page: Verification callbacks setup');
-    } catch (e) {
-      debugPrint('SOS Page: Error setting up verification callbacks - $e');
-    }
-  }
-
-  /// Show verification dialog when AI detection occurs
-  void _showVerificationDialog(DetectionEvent event) {
-    if (!mounted) return;
-    // LAB: Suppress verification dialog during testing
-    if (AppConstants.labSuppressAllSOSDialogs ||
-        AppConstants.labSuppressVerificationDialog) {
-      debugPrint('SOS Page: [LAB] Suppressing verification dialog');
-      return;
-    }
-    // If SOS session is already in progress, don't show verification UI
-    if (_isCountdownActive || _isSOSActive) {
-      debugPrint('SOS Page: Session active; skipping verification dialog');
-      return;
-    }
-    // Prevent multiple verification dialogs
-    if (_isVerificationDialogShowing) {
-      debugPrint('SOS Page: Verification dialog already showing; skipping');
-      return;
-    }
-    // Cooldown check to avoid spamming the dialog
-    final now = DateTime.now();
-    if (_lastVerificationDialogTime != null &&
-        now.difference(_lastVerificationDialogTime!) <
-            _verificationDialogCooldown) {
-      debugPrint('SOS Page: Verification dialog suppressed by cooldown');
-      return;
-    }
-    _isVerificationDialogShowing = true;
-    _lastVerificationDialogTime = now;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => VerificationDialog(
-        detectionEvent: event,
-        verificationService:
-            _serviceManager.sensorService.aiVerificationService!,
-        onVerificationComplete: (shouldProceedWithSOS) {
-          if (shouldProceedWithSOS) {
-            debugPrint(
-              'SOS Page: Verification confirmed - starting SOS session',
-            );
-            // Trigger SOS countdown
-            _serviceManager.sosService.startSOSCountdown(
-              type: SOSType.crashDetection,
-              userMessage: 'AI verification - ${event.type.name} detected',
-              bringToSOSPage: false, // Already on SOS page
-            );
-          } else {
-            debugPrint('SOS Page: Verification canceled - user confirmed OK');
-          }
-        },
-      ),
-    ).whenComplete(() {
-      // Clear flag when dialog is dismissed
-      _isVerificationDialogShowing = false;
-    });
   }
 
   @override
@@ -792,6 +900,25 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
             duration: Duration(seconds: 3),
           ),
         );
+
+        // If offline, show a clear banner indicating queued delivery + SMS fallback
+        try {
+          final isOffline = ConnectivityMonitorService().isOffline;
+          if (isOffline) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  '📴 Offline Mode: SOS queued. SMS fallback available.',
+                ),
+                backgroundColor: Colors.orange,
+                behavior: SnackBarBehavior.floating,
+                duration: Duration(seconds: 4),
+              ),
+            );
+          }
+        } catch (_) {
+          // Best-effort banner; ignore any connectivity lookup issues
+        }
       }
     } catch (e) {
       debugPrint('Error activating SOS: $e');
@@ -802,8 +929,13 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   /// Emergency SOS with full SAR system integration
   Future<void> _sendEmergencySOS() async {
     try {
-      // 1. Get current location
-      final location = await LocationService.getCurrentLocationStatic();
+      // 1. Get current location (offline-friendly)
+      // Use service-based fetch which falls back to cached values and returns null on failure,
+      // avoiding a hard 10s TimeoutException that blocks SOS activation in airplane mode.
+      final locInfo = await _serviceManager.locationService.getCurrentLocation(
+        highAccuracy: true,
+        forceFresh: false,
+      );
 
       // 2. Activate FULL SOS Service with SAR coordination
       // The 10-second button hold served as the countdown, so activate immediately
@@ -824,27 +956,30 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       //    - Sends satellite emergency alert if available
       //    - Tracks rescue responses
 
-      // 4. Send additional Firebase alert for redundancy
-      final firebaseService = _serviceManager.firebaseService;
-      final userId = firebaseService.currentUser?.uid ?? 'anonymous';
-
-      final sosSession = SOSSession(
-        id: 'sos_${DateTime.now().millisecondsSinceEpoch}',
-        userId: userId,
-        type: SOSType.manual,
-        status: SOSStatus.active,
-        startTime: DateTime.now(),
-        location: LocationInfo(
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          timestamp: DateTime.now(),
-        ),
-        userMessage: 'Emergency SOS - Full SAR coordination activated',
-      );
-
-      // Send to Firebase for backup/logging
-      await firebaseService.sendSosAlert(sosSession);
+      // 4. Send additional Firebase alert for redundancy (online-only)
+      try {
+        final offline = ConnectivityMonitorService().isOffline;
+        if (!offline && locInfo != null) {
+          final firebaseService = _serviceManager.firebaseService;
+          final userId = firebaseService.currentUser?.uid ?? 'anonymous';
+          final sosSession = SOSSession(
+            id: 'sos_${DateTime.now().millisecondsSinceEpoch}',
+            userId: userId,
+            type: SOSType.manual,
+            status: SOSStatus.active,
+            startTime: DateTime.now(),
+            location: LocationInfo(
+              latitude: locInfo.latitude,
+              longitude: locInfo.longitude,
+              accuracy: locInfo.accuracy,
+              timestamp: DateTime.now(),
+            ),
+            userMessage: 'Emergency SOS - Full SAR coordination activated',
+          );
+          // Send to Firebase for backup/logging (best-effort)
+          await firebaseService.sendSosAlert(sosSession);
+        }
+      } catch (_) {}
 
       // Stay on SOS page so the inline "SOS Activated" banner/section and
       // activation dialog appear above the RedPing button, matching the
@@ -853,9 +988,13 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       // sees the same in-page activation UI.
       if (!mounted) return;
 
-      debugPrint(
-        'Emergency SOS initiated (manual). Location: ${location.latitude}, ${location.longitude}',
-      );
+      if (locInfo != null) {
+        debugPrint(
+          'Emergency SOS initiated (manual). Location: ${locInfo.latitude}, ${locInfo.longitude}',
+        );
+      } else {
+        debugPrint('Emergency SOS initiated (manual). Location unavailable');
+      }
     } catch (e) {
       debugPrint('Error sending emergency SOS: $e');
       rethrow;
@@ -882,13 +1021,6 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     if (AppConstants.labSuppressAllSOSDialogs ||
         AppConstants.labSuppressCountdownDialog) {
       debugPrint('SOSPage: [LAB] Suppressing countdown dialog');
-      return;
-    }
-    // If verification dialog is up, suppress legacy countdown to avoid overlap
-    if (_isVerificationDialogShowing) {
-      debugPrint(
-        'SOSPage: Verification dialog active; suppressing countdown dialog',
-      );
       return;
     }
     if (_isDialogShowing) {
@@ -1046,6 +1178,17 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                     .withValues(alpha: 0.1)
               : null,
           actions: [
+            IconButton(
+              tooltip: 'Emergency Hotline (Manual Dial)',
+              icon: const Icon(Icons.local_phone, color: AppTheme.criticalRed),
+              onPressed: _showEmergencyHotlineSheet,
+            ),
+            if (kDebugMode)
+              IconButton(
+                tooltip: 'Dev: Simulate Flight',
+                icon: const Icon(Icons.flight_takeoff),
+                onPressed: _openDevFlightSimulator,
+              ),
             if (_isSOSActive || _isCountdownActive)
               IconButton(
                 icon: const Icon(Icons.cancel, color: AppTheme.primaryRed),
@@ -1106,6 +1249,8 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                         // SOS Active Banner (if active)
                         if (_isSOSActive || _isCountdownActive)
                           _buildSOSActiveBanner(),
+
+                        if (kDebugMode) _buildRedPingModeDebugCard(),
 
                         // User Identification Card (if SOS is active)
                         if (_isSOSActive)
@@ -1226,12 +1371,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
                         const SizedBox(height: 16),
 
-                        // AI Safety Assistant
-                        const AIAssistantCard(),
-
-                        const SizedBox(height: 16),
-
-                        // (Removed) Developer test cards for AI and WebRTC calls
+                        // (Removed) Developer test cards for voice/WebRTC calls
 
                         // Removed duplicate Help section (HelpAssistantCard) to avoid redundancy with RedPing button
 
@@ -1308,7 +1448,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 const SizedBox(height: 4),
                 Text(
                   _isSOSActive
-                      ? 'Emergency services have been notified'
+                      ? 'Your emergency contacts have been notified'
                       : 'SOS will activate in $_countdownSeconds seconds',
                   style: const TextStyle(color: Colors.white70, fontSize: 14),
                 ),
@@ -1323,6 +1463,54 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
               icon: const Icon(Icons.close, color: Colors.white, size: 24),
               tooltip: 'Cancel SOS',
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRedPingModeDebugCard() {
+    final activeMode = _modeService.activeMode;
+    final sensorStatus = _serviceManager.sensorService.getSensorStatus();
+
+    final crashThreshold = (sensorStatus['crashThreshold'] as num?)?.toDouble();
+    final fallThreshold = (sensorStatus['fallThreshold'] as num?)?.toDouble();
+    final isMonitoring = sensorStatus['isMonitoring'] == true;
+    final isLowPower = _serviceManager.sensorService.isLowPowerMode;
+    final hasOverrides = sensorStatus['hasRedPingModeOverrides'] == true;
+    final samplingOverrideMs = sensorStatus['samplingPeriodOverrideMs'];
+    final powerModeOverride = sensorStatus['powerModeOverride'] as String?;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      color: Colors.black.withValues(alpha: 0.06),
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        title: const Text(
+          'Dev: RedPing Mode / Sensors',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          '${activeMode?.name ?? 'No active mode'} • ${isMonitoring ? 'Monitoring' : 'Not monitoring'}',
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Mode id: ${activeMode?.id ?? '—'}'),
+                Text('Overrides: ${hasOverrides ? 'ON' : 'OFF'}'),
+                Text('Power: ${isLowPower ? 'LOW POWER' : 'ACTIVE'} (override: ${powerModeOverride ?? '—'})'),
+                Text('Sampling override: ${samplingOverrideMs ?? '—'} ms'),
+                Text(
+                  'Crash threshold: ${crashThreshold?.toStringAsFixed(1) ?? '—'} m/s²',
+                ),
+                Text(
+                  'Fall threshold: ${fallThreshold?.toStringAsFixed(1) ?? '—'} m/s²',
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1344,115 +1532,13 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     );
   }
 
-  /// Check access and show upgrade dialog if needed
-  Future<void> _checkAccessAndShowDialog({
-    required String feature,
-    required String featureName,
-    required String featureDescription,
-    required VoidCallback onAccessGranted,
-    List<String> benefits = const [],
-  }) async {
-    final accessController = SubscriptionAccessController();
-
-    if (accessController.hasFeatureAccess(feature)) {
-      onAccessGranted();
-    } else {
-      final requiredTier = accessController.getRequiredTierForFeature(feature);
-
-      await SubscriptionUpgradeDialog.showForFeature(
-        context,
-        feature: feature,
-        featureName: featureName,
-        featureDescription: featureDescription,
-        requiredTier: requiredTier,
-        benefits: benefits.isNotEmpty ? benefits : _getDefaultBenefits(feature),
-      );
-    }
-  }
-
-  /// Get default benefits for a feature
-  List<String> _getDefaultBenefits(String feature) {
-    switch (feature) {
-      case 'sosTesting':
-        return [
-          'Comprehensive system testing and diagnostics',
-          'Advanced crash and fall detection testing',
-          'Location services verification',
-          'Emergency contact system testing',
-          'Network connectivity testing',
-        ];
-
-      case 'medicalInfo':
-        return [
-          'Detailed medical profile management',
-          'Emergency medical information sharing',
-          'Medication tracking and alerts',
-          'Allergy and condition management',
-          'Medical history organization',
-        ];
-
-      case 'sarParticipation':
-        return [
-          'Full Search & Rescue participation',
-          'Emergency response coordination',
-          'Volunteer rescue mission access',
-          'SAR team communication channels',
-          'Mission participation and tracking',
-        ];
-
-      case 'hazardAlerts':
-        return [
-          'Advanced weather monitoring',
-          'Environmental hazard detection',
-          'Community hazard reporting',
-          'Real-time safety alerts',
-          'Location-specific warnings',
-        ];
-
-      case 'emergencyMessaging':
-        return [
-          'Real-time emergency communication',
-          'SAR team messaging channels',
-          'Quick status updates',
-          'Emergency broadcast capabilities',
-          'Priority message delivery',
-        ];
-
-      case 'communityFeatures':
-        return [
-          'Full community participation',
-          'Advanced messaging features',
-          'Nearby user discovery',
-          'Group coordination tools',
-          'Community safety features',
-        ];
-
-      default:
-        return [
-          'Enhanced safety features',
-          'Advanced emergency tools',
-          'Priority support access',
-          'Unlimited usage limits',
-          'Premium functionality',
-        ];
-    }
-  }
-
   void _showEmergencyContacts() {
     context.go('${AppRouter.profile}/emergency-contacts');
   }
 
   /// Handle hazard alerts access with access control
   void _handleHazardAlertsAccess() {
-    _checkAccessAndShowDialog(
-      feature: 'hazardAlerts',
-      featureName: 'Hazard Alerts',
-      featureDescription:
-          'Advanced hazard alerts and weather monitoring require Pro tier or higher. Upgrade to access comprehensive safety alerts and environmental monitoring.',
-      onAccessGranted: () {
-        context.push(AppRouter.hazardAlerts);
-      },
-    );
+    context.push(AppRouter.hazardAlerts);
   }
 
   void _showMedicalInfo() {
@@ -1620,18 +1706,24 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
               child: const Text('Later'),
             ),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 debugPrint(
-                  'SOS Page: Setup Now button pressed - navigating to profile',
+                  'SOS Page: Setup Now pressed - opening emergency contacts + medical profile',
                 );
                 _isDialogShowing = false;
                 Navigator.of(context).pop();
-                // Use a small delay to ensure dialog is dismissed before navigation
-                Future.delayed(const Duration(milliseconds: 100), () {
-                  if (context.mounted) {
-                    context.go('/profile');
-                  }
-                });
+
+                // Small delay to ensure dialog is dismissed before navigation.
+                await Future.delayed(const Duration(milliseconds: 120));
+                if (!mounted) return;
+
+                // Guide user through the two most common missing readiness items.
+                // 1) Emergency contacts
+                // 2) Medical profile (medical card)
+                final router = GoRouter.of(context);
+                await router.push('/profile/emergency-contacts');
+                if (!mounted) return;
+                await router.push('/doctor/profile');
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.primaryRed,
@@ -1753,7 +1845,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     );
   }
 
-  // (Removed) Test AI Emergency Call card and handler
+  // (Removed) Test emergency-call card and handler
 
   // (Removed) Test WebRTC Emergency Call card and handler
 
@@ -1815,15 +1907,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
   /// Handle hazard status click with access control
   void _handleHazardStatusClick(String category) {
-    _checkAccessAndShowDialog(
-      feature: 'hazardAlerts',
-      featureName: 'Hazard Monitoring',
-      featureDescription:
-          'Detailed hazard monitoring and category-specific alerts require Pro tier or higher. Upgrade to access comprehensive environmental safety monitoring.',
-      onAccessGranted: () {
-        _navigateToHazardAlerts(category);
-      },
-    );
+    _navigateToHazardAlerts(category);
   }
 
   // Emergency messaging access handlers removed (UI removed per user request)
@@ -2158,6 +2242,99 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            // Offline/Queued inline indicator
+            Builder(builder: (context) {
+              try {
+                final offline = ConnectivityMonitorService().isOffline;
+                final queued = OfflineSOSQueueService().queueCount;
+                if (offline || queued > 0) {
+                  final text = offline
+                      ? (queued > 1
+                          ? 'Offline mode: queued ($queued); SMS available'
+                          : 'Offline mode: queued; SMS available')
+                      : (queued > 1
+                          ? 'Queued for delivery ($queued)'
+                          : 'Queued for delivery');
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Colors.orange.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          offline ? Icons.wifi_off : Icons.outgoing_mail,
+                          color: Colors.orange,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            text,
+                            style: const TextStyle(
+                              color: Colors.orange,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // Optional quick action: open SMS composer
+                        TextButton.icon(
+                          onPressed: _currentSession == null
+                              ? null
+                              : () async {
+                                  try {
+                                    await EmergencyContactsService()
+                                        .openSMSComposerForEnabledContacts(
+                                      _currentSession!,
+                                    );
+                                  } catch (_) {}
+                                },
+                          icon: const Icon(
+                            Icons.sms,
+                            color: Colors.orange,
+                            size: 18,
+                          ),
+                          label: const Text(
+                            'SMS Now',
+                            style: TextStyle(
+                              color: Colors.orange,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            backgroundColor:
+                                Colors.orange.withValues(alpha: 0.08),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              side: BorderSide(
+                                color: Colors.orange.withValues(alpha: 0.3),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              } catch (_) {}
+              return const SizedBox.shrink();
+            }),
             const SizedBox(height: 12),
             const Divider(color: Colors.white24, height: 1),
             const SizedBox(height: 12),
@@ -2179,10 +2356,10 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 Expanded(
                   child: _buildCompactActionButton(
                     icon: Icons.chat_bubble_rounded,
-                    label: 'Chat',
-                    color: const Color(0xFF2ECC71),
+                    label: 'Messaging',
+                    color: AppTheme.neutralGray,
                     onPressed: _openSOSChat,
-                    tooltip: 'Open Chat with SAR',
+                    tooltip: 'Messaging not available in-app',
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -2190,10 +2367,10 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 Expanded(
                   child: _buildCompactActionButton(
                     icon: Icons.send_rounded,
-                    label: 'Send',
-                    color: const Color(0xFFF39C12),
+                    label: 'Message',
+                    color: AppTheme.neutralGray,
                     onPressed: _sendSOSMessage,
-                    tooltip: 'Quick Message',
+                    tooltip: 'Messaging not available in-app',
                   ),
                 ),
               ],
@@ -2840,8 +3017,8 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
           const SizedBox(height: 8),
 
           // RedPing Button is now the primary control:
-          // - Tap: open RedPing help categories
-          // - Hold 10s: activate SOS
+          // - Tap: open RedPing quick services
+          // - Hold 5s: activate SOS
           const SizedBox(height: 8),
 
           // RedPing Logo Button (Round) with a small status chip below
@@ -2853,11 +3030,11 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                   enableHeartbeat: !_isSOSActive && !_isCountdownActive,
                   size: 160.0,
                   // When SOS active: hold 5s to reset
-                  // When SOS inactive: hold 10s to activate
+                  // When SOS inactive: hold 5s to activate
                   onHoldToActivate: _isSOSActive
                       ? _onSOSReset
                       : _onSOSActivated,
-                  holdSeconds: _isSOSActive ? 5 : 10,
+                  holdSeconds: 5,
                   // Turn green when SOS session is actually active
                   isSosActivated: _isSOSActive,
                 ),
@@ -2865,8 +3042,13 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 // Real-time sensor data with GPS speed callback
                 SensorDataDisplay(
                   onSpeedUpdate: _onGPSSpeedUpdate,
+                  onAltitudeUpdate: _onAltitudeUpdate,
                   forceGPS: true,
                 ),
+                if (kDebugMode && LocationService().debugOverrideEnabled) ...[
+                  const SizedBox(height: 6),
+                  _buildDevSimulationBanner(),
+                ],
                 const SizedBox(height: 10),
                 // Monitoring status strip
                 Row(
@@ -2907,11 +3089,13 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                     ),
                   ),
                 ],
+                const SizedBox(height: 10),
+                const _SosDeliveryStatusStrip(),
                 const SizedBox(height: 12),
                 Text(
                   _isSOSActive
-                      ? 'Tap to open RedPing help categories\nHold 5s to reset SOS'
-                      : 'Tap to open RedPing help categories\nHold 10s to activate SOS',
+                      ? 'Tap to open RedPing quick services\nHold 5s to reset SOS'
+                      : 'Tap to open RedPing quick services\nHold 5s to activate SOS',
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -2920,6 +3104,40 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                   textAlign: TextAlign.center,
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDevSimulationBanner() {
+    final ls = LocationService();
+    final speedKmh = (ls.debugOverrideSpeedMps ?? 0.0) * 3.6;
+    final alt = ls.debugOverrideAltitudeM;
+    final parts = <String>[];
+    if (speedKmh > 0) parts.add('${speedKmh.toStringAsFixed(0)} km/h');
+    if (alt != null) parts.add('${alt.toStringAsFixed(0)} m');
+    final detail = parts.isEmpty ? '' : ' — ${parts.join(' • ')}';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.flight_takeoff, size: 14, color: AppTheme.infoBlue),
+          const SizedBox(width: 6),
+          Text(
+            'Simulation ON$detail',
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.infoBlue,
             ),
           ),
         ],
@@ -2958,7 +3176,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Please choose a help category'),
+              content: Text('Please choose a quick service'),
               backgroundColor: AppTheme.warningOrange,
             ),
           );
@@ -2980,7 +3198,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
           );
 
       debugPrint(
-        'REDP!NG: Help request sent for category: $_selectedHelpCategory (ID: $pingId)',
+        'REDP!NG: Help request sent for service: $_selectedHelpCategory (ID: $pingId)',
       );
 
       if (mounted) {
@@ -3025,9 +3243,8 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     }
   }
 
-  // Quick picker for REDP!NG help categories, then send via messaging integration
+  // Quick picker for REDP!NG quick services, then send via messaging integration
   Future<void> _showRedpingQuickHelpSheet() async {
-    final helpService = HelpService();
     await showModalBottomSheet<void>(
       context: context,
       // Allow the sheet to take more height and become scrollable if needed
@@ -3043,155 +3260,80 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
               // Ensure content is above system insets/keyboard if shown
               bottom: MediaQuery.of(context).viewInsets.bottom + 16,
             ),
-            child: FutureBuilder<void>(
-              future: helpService.initialize(),
-              builder: (context, snapshot) {
-                final isLoading =
-                    snapshot.connectionState == ConnectionState.waiting;
-                final categories = helpService.getHelpCategories();
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const SizedBox(height: 12),
-                    Center(
-                      child: Container(
-                        height: 4,
-                        width: 40,
-                        decoration: BoxDecoration(
-                          color: AppTheme.neutralGray.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 12),
+                Center(
+                  child: Container(
+                    height: 4,
+                    width: 40,
+                    decoration: BoxDecoration(
+                      color: AppTheme.neutralGray.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(2),
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Quick Services',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.primaryText,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Quick Services',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.primaryText,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      _quickServiceButton(
+                        label: 'Police',
+                        icon: Icons.local_police,
+                        color: AppTheme.criticalRed,
+                        onTap: () => _quickSendHelp('police_emergency'),
                       ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          _quickServiceButton(
-                            label: 'Police',
-                            icon: Icons.local_police,
-                            color: AppTheme.criticalRed,
-                            onTap: () => _quickSendHelp('police_emergency'),
-                          ),
-                          _quickServiceButton(
-                            label: 'Ambulance',
-                            icon: Icons.medical_services,
-                            color: AppTheme.infoBlue,
-                            onTap: () => _quickSendHelp('medical_emergency'),
-                          ),
-                          _quickServiceButton(
-                            label: 'Fire',
-                            icon: Icons.local_fire_department,
-                            color: Colors.deepOrange,
-                            onTap: () => _quickSendHelp('fire_emergency'),
-                          ),
-                          _quickServiceButton(
-                            label: 'Hazard',
-                            icon: Icons.warning_amber,
-                            color: AppTheme.warningOrange,
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              _handleHazardAlertsAccess();
-                            },
-                          ),
-                          _quickServiceButton(
-                            label: 'Report',
-                            icon: Icons.report,
-                            color: AppTheme.infoBlue,
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      const ComprehensiveRedpingHelpPage(),
-                                ),
-                              );
-                            },
-                          ),
-                          _quickServiceButton(
-                            label: 'Quick Call',
-                            icon: Icons.call,
-                            color: AppTheme.safeGreen,
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              _showEmergencyContacts();
-                            },
-                          ),
-                        ],
+                      _quickServiceButton(
+                        label: 'Ambulance',
+                        icon: Icons.medical_services,
+                        color: AppTheme.infoBlue,
+                        onTap: () => _quickSendHelp('medical_emergency'),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Divider(height: 24),
-                    const Text(
-                      'Help Categories',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.primaryText,
+                      _quickServiceButton(
+                        label: 'Fire',
+                        icon: Icons.local_fire_department,
+                        color: Colors.deepOrange,
+                        onTap: () => _quickSendHelp('fire_emergency'),
                       ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    if (isLoading)
-                      const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: categories.length,
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 3,
-                                mainAxisSpacing: 10,
-                                crossAxisSpacing: 10,
-                                childAspectRatio: 1.0,
-                              ),
-                          itemBuilder: (context, index) {
-                            final cat = categories[index];
-                            return _categoryTile(
-                              cat,
-                              onTap: () {
-                                Navigator.of(context).pop();
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        ComprehensiveRedpingHelpPage(
-                                          initialCategoryId: cat.id,
-                                        ),
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        ),
+                      _quickServiceButton(
+                        label: 'Hazard',
+                        icon: Icons.warning_amber,
+                        color: AppTheme.warningOrange,
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          _handleHazardAlertsAccess();
+                        },
                       ),
-                    const SizedBox(height: 12),
-                  ],
-                );
-              },
+                      _quickServiceButton(
+                        label: 'Quick Call',
+                        icon: Icons.call,
+                        color: AppTheme.safeGreen,
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          _showEmergencyContacts();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
             ),
           ),
         );
@@ -3232,79 +3374,6 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
         ),
       ),
     );
-  }
-
-  Widget _categoryTile(HelpCategory cat, {required VoidCallback onTap}) {
-    final icon = _iconFromName(cat.icon);
-    final color = _colorForPriority(cat.priority);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(height: 6),
-            Text(
-              cat.name,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppTheme.primaryText,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  IconData _iconFromName(String? name) {
-    switch (name) {
-      case 'local_police':
-        return Icons.local_police;
-      case 'medical_services':
-        return Icons.medical_services;
-      case 'local_fire_department':
-        return Icons.local_fire_department;
-      case 'warning':
-        return Icons.warning;
-      case 'report':
-        return Icons.report;
-      case 'car_repair':
-        return Icons.car_repair;
-      case 'directions_boat':
-        return Icons.directions_boat;
-      case 'security':
-        return Icons.security;
-      case 'search':
-        return Icons.search;
-      default:
-        return Icons.help_outline;
-    }
-  }
-
-  Color _colorForPriority(HelpPriority priority) {
-    switch (priority) {
-      case HelpPriority.critical:
-        return AppTheme.criticalRed;
-      case HelpPriority.high:
-        return AppTheme.warningOrange;
-      case HelpPriority.medium:
-        return AppTheme.infoBlue;
-      case HelpPriority.low:
-        return Colors.green;
-    }
   }
 
   Future<void> _quickSendHelp(String categoryId) async {
@@ -3515,7 +3584,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   Future<void> _startSOSWebRTCCall() async {
     try {
       final webrtcService =
-          _serviceManager.phoneAIIntegrationService.webrtcService;
+          _serviceManager.phoneVoiceIntegrationService.webrtcService;
 
       if (!webrtcService.isInitialized) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3651,7 +3720,7 @@ This is an urgent emergency call. Please respond if you can hear me.''';
             TextButton(
               onPressed: () async {
                 try {
-                  await _serviceManager.phoneAIIntegrationService
+                    await _serviceManager.phoneVoiceIntegrationService
                       .endWebRTCCall();
                   if (dialogContext.mounted) {
                     Navigator.of(dialogContext).pop();
@@ -3708,182 +3777,30 @@ This is an urgent emergency call. Please respond if you can hear me.''';
 
   /// Open chat with SAR team or emergency contacts
   Future<void> _openSOSChat() async {
-    try {
-      // Check if SOS session exists
-      if (_currentSession == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No active SOS session'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-        return;
-      }
-
-      // Navigate to real-time SOS chat page
-      if (!mounted) return;
-
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => SOSChatPage(
-            session: _currentSession!,
-            isSARUser: false, // User is victim
-          ),
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to open chat: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Messaging is not available in-app in this build.'),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   /// Send quick message to SAR team or emergency contacts
   Future<void> _sendSOSMessage() async {
-    try {
-      // Show quick message selector
-      showModalBottomSheet(
-        context: context,
-        builder: (context) {
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    'Send Quick Message',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.check_circle, color: Colors.green),
-                  title: const Text('I\'m okay'),
-                  subtitle: const Text('Situation is under control'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _sendQuickMessage('I\'m okay - situation is under control');
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(
-                    Icons.medical_services,
-                    color: Colors.red,
-                  ),
-                  title: const Text('Need medical help'),
-                  subtitle: const Text('Request immediate medical assistance'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _sendQuickMessage(
-                      'URGENT: Need medical assistance immediately',
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.location_on, color: Colors.blue),
-                  title: const Text('Send my location'),
-                  subtitle: const Text('Share current GPS coordinates'),
-                  onTap: () async {
-                    Navigator.pop(context);
-                    final location =
-                        _serviceManager.locationService.currentPosition;
-                    if (location != null) {
-                      _sendQuickMessage(
-                        'My location: https://maps.google.com/?q=${location.latitude},${location.longitude}',
-                      );
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Location unavailable')),
-                      );
-                    }
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.warning, color: Colors.orange),
-                  title: const Text('Situation worsening'),
-                  subtitle: const Text(
-                    'Alert team of deteriorating conditions',
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _sendQuickMessage(
-                      'WARNING: Situation is getting worse - need help urgently',
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.edit, color: Colors.grey),
-                  title: const Text('Custom message'),
-                  subtitle: const Text('Write your own message'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showCustomMessageDialog();
-                  },
-                ),
-              ],
-            ),
-          );
-        },
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to send message: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  /// Send quick predefined message
-  Future<void> _sendQuickMessage(String message) async {
-    // TODO: Integrate with actual messaging service
-    AppLogger.i('Sending SOS message: $message', tag: 'SOS');
-
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Message sent: $message'),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 3),
+      const SnackBar(
+        content: Text('Messaging is not available in-app in this build.'),
+        backgroundColor: Colors.orange,
       ),
     );
   }
 
   /// Show custom message dialog
   Future<void> _showCustomMessageDialog() async {
-    final controller = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Send Custom Message'),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'Type your message...',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (controller.text.trim().isNotEmpty) {
-                Navigator.pop(context);
-                _sendQuickMessage(controller.text.trim());
-              }
-            },
-            child: const Text('Send'),
-          ),
-        ],
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Messaging is not available in-app in this build.'),
+        backgroundColor: Colors.orange,
       ),
     );
   }
@@ -4163,7 +4080,7 @@ This is an urgent emergency call. Please respond if you can hear me.''';
     _showEmergencyCallOptions(_getEmergencyNumber());
   }
 
-  /// Share current location via SMS/chat
+  /// Share current location via SMS
   Future<void> _shareCurrentLocation() async {
     try {
       // Prefer active SOS incident coordinates, else current location
@@ -4260,35 +4177,6 @@ This is an urgent emergency call. Please respond if you can hear me.''';
                     ),
                   ),
                   // Share options
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppTheme.safeGreen.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(Icons.chat, color: AppTheme.safeGreen),
-                    ),
-                    title: const Text(
-                      'Send to SAR Chat',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    subtitle: const Text(
-                      'Share via real-time chat',
-                      style: TextStyle(color: Colors.white60),
-                    ),
-                    trailing: const Icon(
-                      Icons.arrow_forward_ios,
-                      color: Colors.white54,
-                    ),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _sendQuickMessage('📍 My location: $googleMapsLink');
-                    },
-                  ),
                   ListTile(
                     leading: Container(
                       padding: const EdgeInsets.all(8),
@@ -4568,6 +4456,187 @@ This is an urgent emergency call. Please respond if you can hear me.''';
   // ============================================================================
 
   // Removed unused _getCategoryDisplayName method
+}
+
+class _SosDeliveryStatusStrip extends StatefulWidget {
+  const _SosDeliveryStatusStrip();
+
+  @override
+  State<_SosDeliveryStatusStrip> createState() => _SosDeliveryStatusStripState();
+}
+
+class _SosDeliveryStatusStripState extends State<_SosDeliveryStatusStrip> {
+  StreamSubscription<List<ConnectivityResult>>? _sub;
+  Timer? _refreshTimer;
+
+  List<ConnectivityResult> _results = const [];
+  bool _hasInternetAccess = true;
+  bool _enableSms = false;
+  int _enabledContacts = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_initialize());
+  }
+
+  Future<void> _initialize() async {
+    try {
+      await ConnectivityMonitorService().initialize();
+    } catch (_) {}
+
+    // Prime with a one-shot check (best-effort)
+    try {
+      _results = await Connectivity().checkConnectivity();
+    } catch (_) {
+      _results = const [];
+    }
+
+    // Subscribe to changes
+    try {
+      _sub = ConnectivityMonitorService().connectivityStream.listen((results) {
+        if (!mounted) return;
+        setState(() {
+          _results = results;
+        });
+      });
+    } catch (_) {}
+
+    // Periodically pull cheap state (prefs + cached reachability flag)
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_refresh());
+    });
+    await _refresh();
+
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final enableSms = prefs.getBool('enable_sms_notifications') ?? false;
+      final enabledContacts = EmergencyContactsService().enabledContacts.length;
+      final hasInternetAccess = ConnectivityMonitorService().hasInternetAccess;
+
+      if (!mounted) return;
+      setState(() {
+        _enableSms = enableSms;
+        _enabledContacts = enabledContacts;
+        _hasInternetAccess = hasInternetAccess;
+      });
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasAnyBearer = _results.any((r) => r != ConnectivityResult.none);
+    final hasMobile = _results.contains(ConnectivityResult.mobile);
+    final hasWifi = _results.contains(ConnectivityResult.wifi);
+
+    final smsAvailable = _enableSms && hasMobile;
+    final internetShareAvailable = hasAnyBearer && _hasInternetAccess;
+    final effectivelyOffline = !internetShareAvailable;
+
+    Color chipBg(bool ok) => ok
+        ? AppTheme.safeGreen.withValues(alpha: 0.18)
+        : AppTheme.neutralGray.withValues(alpha: 0.12);
+    Color chipFg(bool ok) => ok ? AppTheme.safeGreen : AppTheme.secondaryText;
+
+    Widget chip({required IconData icon, required String label, required bool ok}) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: chipBg(ok),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: (ok ? AppTheme.safeGreen : AppTheme.neutralGray)
+                .withValues(alpha: 0.35),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: chipFg(ok)),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: chipFg(ok),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final modeText = hasWifi && !hasMobile
+        ? 'Wi‑Fi only'
+        : (hasMobile ? 'Mobile' : (hasAnyBearer ? 'Connected' : 'No network'));
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.darkSurface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.neutralGray.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                effectivelyOffline ? Icons.cloud_off : Icons.cloud_done,
+                size: 14,
+                color: effectivelyOffline ? AppTheme.warningOrange : AppTheme.safeGreen,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Delivery: $modeText • Contacts: $_enabledContacts',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.primaryText,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              chip(icon: Icons.sms, label: 'SMS', ok: smsAvailable),
+              chip(
+                icon: Icons.share,
+                label: 'Internet Share',
+                ok: internetShareAvailable,
+              ),
+              chip(
+                icon: Icons.cloud_upload,
+                label: 'Offline Queue',
+                ok: effectivelyOffline,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Custom painter for the ping location marker "!"

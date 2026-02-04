@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/routing/app_router.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/onboarding_prefs.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../features/onboarding/ai_permission_request.dart';
+import '../../../core/app/app_launch_config.dart';
+import '../../../core/app_variant.dart';
 
 /// Splash screen with RedPing branding and initialization
 class SplashPage extends StatefulWidget {
@@ -66,54 +66,32 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
 
     if (!mounted) return;
 
-    if (!auth.isAuthenticated) {
+    // Check if user can bypass login (3+ successful logins on same device, <7 days)
+    final canBypass = await auth.shouldBypassLogin();
+
+    if (!auth.isAuthenticated && !canBypass) {
       router.go(AppRouter.login);
       return;
     }
 
+    // SAR entrypoint: skip SOS-focused onboarding and extra permission flows.
+    if (AppLaunchConfig.variant == AppVariant.sar) {
+      router.go(AppLaunchConfig.homeRoute);
+      return;
+    }
+
+    // SOS entrypoint: skip startup onboarding entirely.
+    if (AppLaunchConfig.skipStartupOnboarding) {
+      router.go(AppLaunchConfig.homeRoute);
+      return;
+    }
+
+    // If user is authenticated (either through session or bypass), proceed
     if (!OnboardingPrefs.instance.isCompleted) {
       router.go(AppRouter.onboarding);
       return;
     }
-
-    // Check if user has seen AI permission request
-    final prefs = await SharedPreferences.getInstance();
-    final hasSeenAIPermission =
-        prefs.getBool('has_seen_ai_permission') ?? false;
-
-    if (!hasSeenAIPermission) {
-      // Show AI permission request as overlay
-      _showAIPermissionRequest(router);
-      return;
-    }
-
-    router.go(AppRouter.main);
-  }
-
-  /// Show AI Permission Request as fullscreen overlay
-  void _showAIPermissionRequest(GoRouter router) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AIPermissionRequest(
-        onPermissionGranted: () async {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('has_seen_ai_permission', true);
-          if (!dialogContext.mounted) return;
-          Navigator.pop(dialogContext);
-          // Navigate to AI onboarding tutorial
-          router.go(AppRouter.aiOnboarding);
-        },
-        onPermissionDenied: () async {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('has_seen_ai_permission', true);
-          if (!dialogContext.mounted) return;
-          Navigator.pop(dialogContext);
-          // Go to main app without AI features
-          router.go(AppRouter.main);
-        },
-      ),
-    );
+    router.go(AppLaunchConfig.homeRoute);
   }
 
   @override

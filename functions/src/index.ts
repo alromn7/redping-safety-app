@@ -13,6 +13,27 @@ export { createSosSession, createSosSessionAU, createSosSessionEU, createSosSess
 export { api } from "./http/api";
 export { verifyIntegrity } from "./security/integrity";
 
+// Import and export check-in related functions from JavaScript modules
+const checkInNotificationsFns = require('../checkInNotifications');
+const checkInExpiryFns = require('../checkInExpiry');
+const resolutionNotesCleanupFns = require('../resolutionNotesCleanup');
+const revokeCheckInFns = require('../revokeCheckInOnFamilyLeave');
+
+export const checkInRequestCreated = checkInNotificationsFns.checkInRequestCreated;
+export const checkInRequestUpdated = checkInNotificationsFns.checkInRequestUpdated;
+export const expireCheckInRequests = checkInExpiryFns.expireCheckInRequests;
+export const purgeOldCheckInRequests = checkInExpiryFns.purgeOldCheckInRequests;
+export const cleanupResolutionNotes = resolutionNotesCleanupFns.cleanupResolutionNotes;
+export const revokeCheckInOnFamilyLeave = revokeCheckInFns.revokeCheckInOnFamilyLeave;
+
+// Stripe Payment Functions
+const subscriptionPaymentsFns = require('./subscriptionPayments');
+export const processSubscriptionPayment = subscriptionPaymentsFns.processSubscriptionPayment;
+export const cancelSubscription = subscriptionPaymentsFns.cancelSubscription;
+export const updatePaymentMethod = subscriptionPaymentsFns.updatePaymentMethod;
+export const getSubscriptionStatus = subscriptionPaymentsFns.getSubscriptionStatus;
+export const stripeWebhook = subscriptionPaymentsFns.stripeWebhook;
+
 // Start writing functions
 // https://firebase.google.com/docs/functions/typescript
 

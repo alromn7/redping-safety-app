@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RedPing Subscription Plans</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 60px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 48px;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 20px;
+            opacity: 0.95;
+        }
+
+        .pricing-toggle {
+            display: flex;
+            justify-content: center;
+            gap: 0;
+            margin: 40px 0;
+            background: rgba(255,255,255,0.2);
+            border-radius: 50px;
+            padding: 5px;
+            width: fit-content;
+            margin: 40px auto;
+        }
+
+        .toggle-option {
+            cursor: pointer;
+            padding: 12px 40px;
+            border-radius: 50px;
+            transition: all 0.3s;
+            color: white;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .toggle-option.active {
+            background: white;
+            color: #667eea;
+        }
+
+        .plans-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+
+        .plan-card {
+            background: white;
+            border-radius: 20px;
+            padding: 35px 25px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            transition: transform 0.3s, box-shadow 0.3s;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .plan-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+        }
+
+        .plan-card.popular {
+            border: 3px solid #667eea;
+        }
+
+        .badge {
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 6px 20px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .badge.best-value {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+
+        .plan-icon {
+            font-size: 50px;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        .plan-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .plan-description {
+            color: #666;
+            font-size: 14px;
+            text-align: center;
+            margin-bottom: 25px;
+            min-height: 40px;
+        }
+
+        .price-display {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .price {
+            font-size: 48px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .price-currency {
+            font-size: 24px;
+            vertical-align: super;
+        }
+
+        .price-period {
+            font-size: 16px;
+            color: #666;
+        }
+
+        .savings {
+            background: #FF6B6B;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 13px;
+            font-weight: bold;
+            display: inline-block;
+            margin-top: 8px;
+        }
+
+        .features {
+            list-style: none;
+            margin: 25px 0;
+            flex-grow: 1;
+        }
+
+        .features li {
+            padding: 10px 0;
+            color: #555;
+            font-size: 14px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .checkmark {
+            color: #43e97b;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .cta-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+
+        .cta-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .free-plan {
+            opacity: 0.85;
+        }
+
+        .free-plan .cta-button {
+            background: #e0e0e0;
+            color: #666;
+        }
+
+        @media (max-width: 768px) {
+            .plans-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 36px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔴 RedPing Subscription Plans</h1>
+            <p>Choose the perfect plan for your safety needs</p>
+        </div>
+
+        <div class="pricing-toggle">
+            <div class="toggle-option active" onclick="showMonthly()">Monthly</div>
+            <div class="toggle-option" onclick="showYearly()">Yearly</div>
+        </div>
+
+        <div class="plans-grid">
+            <!-- Free Plan -->
+            <div class="plan-card free-plan">
+                <div class="plan-icon">🆓</div>
+                <div class="plan-name">Free</div>
+                <div class="plan-description">Basic safety features for everyone</div>
+                
+                <div class="price-display">
+                    <div class="price">
+                        <span class="price-currency">$</span>0
+                        <span class="price-period">/forever</span>
+                    </div>
+                </div>
+
+                <ul class="features">
+                    <li><span class="checkmark">✓</span> Basic SOS button</li>
+                    <li><span class="checkmark">✓</span> Location sharing</li>
+                    <li><span class="checkmark">✓</span> Emergency contacts (3 max)</li>
+                    <li><span class="checkmark">✓</span> Basic RedPing mode</li>
+                    <li><span class="checkmark">✓</span> Community chat access</li>
+                </ul>
+
+                <button class="cta-button">Current Plan</button>
+            </div>
+
+            <!-- Essential+ Plan -->
+            <div class="plan-card">
+                <div class="plan-icon">⭐</div>
+                <div class="plan-name">Essential+</div>
+                <div class="plan-description">Enhanced safety for individuals</div>
+                
+                <div class="price-display">
+                    <div class="monthly-price">
+                        <div class="price">
+                            <span class="price-currency">$</span>4.99
+                            <span class="price-period">/month</span>
+                        </div>
+                    </div>
+                    <div class="yearly-price" style="display:none;">
+                        <div class="price">
+                            <span class="price-currency">$</span>49.99
+                            <span class="price-period">/year</span>
+                        </div>
+                        <div class="savings">Save $9.89</div>
+                    </div>
+                </div>
+
+                <ul class="features">
+                    <li><span class="checkmark">✓</span> All Free features</li>
+                    <li><span class="checkmark">✓</span> Advanced SOS with audio</li>
+                    <li><span class="checkmark">✓</span> Unlimited emergency contacts</li>
+                    <li><span class="checkmark">✓</span> 24/7 AI Safety Assistant</li>
+                    <li><span class="checkmark">✓</span> Hazard alerts & mapping</li>
+                    <li><span class="checkmark">✓</span> Priority support</li>
+                </ul>
+
+                <button class="cta-button">Get Essential+</button>
+            </div>
+
+            <!-- Pro Plan -->
+            <div class="plan-card popular">
+                <div class="badge">MOST POPULAR</div>
+                <div class="plan-icon">🚀</div>
+                <div class="plan-name">Pro</div>
+                <div class="plan-description">Complete protection suite</div>
+                
+                <div class="price-display">
+                    <div class="monthly-price">
+                        <div class="price">
+                            <span class="price-currency">$</span>9.99
+                            <span class="price-period">/month</span>
+                        </div>
+                    </div>
+                    <div class="yearly-price" style="display:none;">
+                        <div class="price">
+                            <span class="price-currency">$</span>99.99
+                            <span class="price-period">/year</span>
+                        </div>
+                        <div class="savings">Save $19.89</div>
+                    </div>
+                </div>
+
+                <ul class="features">
+                    <li><span class="checkmark">✓</span> All Essential+ features</li>
+                    <li><span class="checkmark">✓</span> Advanced AI predictions</li>
+                    <li><span class="checkmark">✓</span> Real-time hazard monitoring</li>
+                    <li><span class="checkmark">✓</span> Incident history tracking</li>
+                    <li><span class="checkmark">✓</span> Custom safety zones</li>
+                    <li><span class="checkmark">✓</span> Detailed analytics</li>
+                    <li><span class="checkmark">✓</span> Premium support 24/7</li>
+                </ul>
+
+                <button class="cta-button">Get Pro</button>
+            </div>
+
+            <!-- Ultra Plan -->
+            <div class="plan-card">
+                <div class="plan-icon">💎</div>
+                <div class="plan-name">Ultra</div>
+                <div class="plan-description">Enterprise-level safety management</div>
+                
+                <div class="price-display">
+                    <div class="monthly-price">
+                        <div class="price">
+                            <span class="price-currency">$</span>29.99
+                            <span class="price-period">/month</span>
+                        </div>
+                        <div style="font-size: 14px; color: #666; margin-top: 5px;">+ $5/member</div>
+                    </div>
+                    <div class="yearly-price" style="display:none;">
+                        <div class="price">
+                            <span class="price-currency">$</span>299.99
+                            <span class="price-period">/year</span>
+                        </div>
+                        <div style="font-size: 14px; color: #666; margin-top: 5px;">+ $5/member/month</div>
+                        <div class="savings">Save $59.89</div>
+                    </div>
+                </div>
+
+                <ul class="features">
+                    <li><span class="checkmark">✓</span> All Pro features</li>
+                    <li><span class="checkmark">✓</span> SAR Dashboard access</li>
+                    <li><span class="checkmark">✓</span> Multi-member management</li>
+                    <li><span class="checkmark">✓</span> Organization controls</li>
+                    <li><span class="checkmark">✓</span> Advanced reporting</li>
+                    <li><span class="checkmark">✓</span> API access</li>
+                    <li><span class="checkmark">✓</span> Dedicated account manager</li>
+                </ul>
+
+                <button class="cta-button">Get Ultra</button>
+            </div>
+
+            <!-- Family Plan -->
+            <div class="plan-card">
+                <div class="badge best-value">BEST VALUE</div>
+                <div class="plan-icon">👨‍👩‍👧‍👦</div>
+                <div class="plan-name">Family</div>
+                <div class="plan-description">Perfect for families & small groups</div>
+                
+                <div class="price-display">
+                    <div class="monthly-price">
+                        <div class="price">
+                            <span class="price-currency">$</span>19.99
+                            <span class="price-period">/month</span>
+                        </div>
+                        <div style="font-size: 14px; color: #666; margin-top: 5px;">Up to 4 accounts</div>
+                    </div>
+                    <div class="yearly-price" style="display:none;">
+                        <div class="price">
+                            <span class="price-currency">$</span>199.99
+                            <span class="price-period">/year</span>
+                        </div>
+                        <div style="font-size: 14px; color: #666; margin-top: 5px;">Up to 4 accounts</div>
+                        <div class="savings">Save $39.89</div>
+                    </div>
+                </div>
+
+                <ul class="features">
+                    <li><span class="checkmark">✓</span> All Pro features</li>
+                    <li><span class="checkmark">✓</span> 4 independent accounts</li>
+                    <li><span class="checkmark">✓</span> Family location sharing</li>
+                    <li><span class="checkmark">✓</span> Shared emergency contacts</li>
+                    <li><span class="checkmark">✓</span> Group safety notifications</li>
+                    <li><span class="checkmark">✓</span> Family dashboard</li>
+                    <li><span class="checkmark">✓</span> Priority family support</li>
+                </ul>
+
+                <button class="cta-button">Get Family Plan</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showMonthly() {
+            document.querySelectorAll('.toggle-option')[0].classList.add('active');
+            document.querySelectorAll('.toggle-option')[1].classList.remove('active');
+            
+            document.querySelectorAll('.monthly-price').forEach(el => el.style.display = 'block');
+            document.querySelectorAll('.yearly-price').forEach(el => el.style.display = 'none');
+        }
+
+        function showYearly() {
+            document.querySelectorAll('.toggle-option')[0].classList.remove('active');
+            document.querySelectorAll('.toggle-option')[1].classList.add('active');
+            
+            document.querySelectorAll('.monthly-price').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.yearly-price').forEach(el => el.style.display = 'block');
+        }
+    </script>
+</body>
+</html>

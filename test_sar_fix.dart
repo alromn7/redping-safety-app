@@ -14,12 +14,6 @@ void main() async {
 
     print('✅ App service manager initialized successfully');
 
-    // Test subscription service
-    final subscriptionService = appServiceManager.subscriptionService;
-    print(
-      '✅ Subscription service accessible: ${subscriptionService.currentSubscription?.plan.name ?? 'No subscription'}',
-    );
-
     // Test feature access service
     final featureAccessService = appServiceManager.featureAccessService;
     print('✅ Feature access service accessible');

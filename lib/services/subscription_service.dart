@@ -132,12 +132,10 @@ class SubscriptionService {
         monthlyPrice: 0.0,
         yearlyPrice: 0.0,
         description:
-            'Essential Safety Features - RedPing Help, Community, Quick Call & Maps',
+            'Essential Safety Features - Manual SOS, Quick Call & Location Sharing',
         features: [
           'RedPing 1-Tap Help (All Categories)',
-          'Community Chat (Full Participation)',
           'Quick Call - Emergency Services',
-          'Map Access with Real-Time Location',
           'Standard Profile',
           'Manual SOS Activation',
           '2 Emergency Contacts',
@@ -147,20 +145,25 @@ class SubscriptionService {
           'sosAlertsPerMonth': -1, // Unlimited
           'emergencyContacts': 2,
           'redpingHelp': -1, // Unlimited - all categories
-          'communityChat': -1, // Full access
+          // Community chat has been removed from the app (website-only).
+          'communityChat': 0,
           'quickCall': true,
           'mapAccess': true,
           'medicalProfile': false,
           'acfd': false, // No Auto Crash/Fall Detection
           'redpingMode': false,
           'hazardAlerts': false,
-          'aiSafetyAssistant': false,
           'sosSMS': false,
           'gadgetIntegration': false,
           'sarDashboardWrite': false, // Can view only
           'sarAdminAccess': false,
           'satelliteMessages': 0,
           'sarParticipation': false,
+          'sarVolunteerRegistration': false,
+          'sarTeamManagement': false,
+          'sarMissionCoordination': false,
+          'sarAnalytics': false,
+          'multiTeamCoordination': false,
           'organizationManagement': false,
         },
         durationDays: 365,
@@ -179,7 +182,6 @@ class SubscriptionService {
           'Auto Crash Detection (ACFD)',
           'Auto Fall Detection (ACFD)',
           'Manual SOS Override',
-          'AI Verification System',
           'Hazard Alerts (Weather, Natural Disasters)',
           'SOS SMS Alerts to Contacts',
           'Emergency Contacts (up to 5)',
@@ -190,25 +192,30 @@ class SubscriptionService {
           'sosAlertsPerMonth': -1, // Unlimited
           'emergencyContacts': 5,
           'redpingHelp': -1, // Unlimited - all categories
-          'communityChat': -1, // Full access
+          // Community chat has been removed from the app (website-only).
+          'communityChat': 0,
           'quickCall': true,
           'mapAccess': true,
           'medicalProfile': true,
           'acfd': true, // Auto + Manual
           'redpingMode': false,
           'hazardAlerts': true,
-          'aiSafetyAssistant': false,
           'sosSMS': true,
           'gadgetIntegration': false,
           'sarDashboardWrite': false, // Can view only
           'sarAdminAccess': false,
           'satelliteMessages': 5,
           'sarParticipation': false,
+          'sarVolunteerRegistration': false,
+          'sarTeamManagement': false,
+          'sarMissionCoordination': false,
+          'sarAnalytics': false,
+          'multiTeamCoordination': false,
           'organizationManagement': false,
         },
       ),
 
-      // Pro Plan - $9.99 - Adds RedPing Mode + AI + Gadgets + Full SAR Dashboard
+      // Pro Plan - $9.99 - Adds RedPing Mode + Gadgets + Full SAR Dashboard
       sub.SubscriptionPlan(
         id: 'pro_plan',
         name: 'RedPing Pro',
@@ -216,12 +223,11 @@ class SubscriptionService {
         monthlyPrice: 9.99,
         yearlyPrice: 119.88,
         description:
-            'Professional Safety with AI Assistant, Activity Modes & Full SAR Access',
+          'Professional Safety with Activity Modes & Full SAR Access',
         features: [
           'Everything in Essential+',
           'Profile Pro + Medical',
           'RedPing Mode (All Activity Modes)',
-          'AI Safety Assistant (24 Commands)',
           'Gadget Integration (Smartwatch, Car, IoT)',
           'Full SAR Dashboard Access',
           'SAR Volunteer Registration',
@@ -236,20 +242,25 @@ class SubscriptionService {
           'sosAlertsPerMonth': -1, // Unlimited
           'emergencyContacts': -1, // Unlimited
           'redpingHelp': -1, // Unlimited - all categories
-          'communityChat': -1, // Full access
+          // Community chat has been removed from the app (website-only).
+          'communityChat': 0,
           'quickCall': true,
           'mapAccess': true,
           'medicalProfile': true,
           'acfd': true,
           'redpingMode': true, // All modes
           'hazardAlerts': true,
-          'aiSafetyAssistant': true, // 24 commands
           'sosSMS': true,
           'gadgetIntegration': true, // All devices
           'sarDashboardWrite': true, // Full access
           'sarAdminAccess': false,
           'satelliteMessages': 100,
           'sarParticipation': true,
+          'sarVolunteerRegistration': true,
+          'sarTeamManagement': false,
+          'sarMissionCoordination': true,
+          'sarAnalytics': false,
+          'multiTeamCoordination': false,
           'organizationManagement': false,
         },
       ),
@@ -287,20 +298,25 @@ class SubscriptionService {
           'sosAlertsPerMonth': -1, // Unlimited
           'emergencyContacts': -1, // Unlimited
           'redpingHelp': -1, // Unlimited
-          'communityChat': -1, // Full access
+          // Community chat has been removed from the app (website-only).
+          'communityChat': 0,
           'quickCall': true,
           'mapAccess': true,
           'medicalProfile': true,
           'acfd': true,
           'redpingMode': true,
           'hazardAlerts': true,
-          'aiSafetyAssistant': true,
           'sosSMS': true,
           'gadgetIntegration': true,
           'sarDashboardWrite': true,
           'sarAdminAccess': true, // Full admin
           'satelliteMessages': -1, // Unlimited
           'sarParticipation': true,
+          'sarVolunteerRegistration': true,
+          'sarTeamManagement': true,
+          'sarMissionCoordination': true,
+          'sarAnalytics': true,
+          'multiTeamCoordination': true,
           'organizationManagement': true,
           'additionalMemberCost': 5.00, // $5 per Pro member
         },
@@ -323,33 +339,35 @@ class SubscriptionService {
           'Shared Emergency Contacts (Unlimited)',
           'Family Location Sharing (All Members)',
           'Cross-Account Notifications',
-          'Family Chat Channel (Private)',
           'Coordinated SAR Response',
           'Family Activity Overview',
           'Unified Safety Status Dashboard',
-          'Family AI Assistant (Pro Account)',
           'Best Value: \$5 per account vs \$9.99 individual',
         ],
         limits: {
           'sosAlertsPerMonth': -1, // Unlimited for family
           'emergencyContacts': -1, // Shared across family
           'redpingHelp': -1, // Unlimited across family
-          'communityChat': -1, // Full access
+          // Community chat has been removed from the app (website-only).
+          'communityChat': 0,
           'quickCall': true,
           'mapAccess': true,
           'medicalProfile': true, // All accounts
           'acfd': true, // All accounts
           'redpingMode': true, // Pro account only
           'hazardAlerts': true, // All accounts
-          'aiSafetyAssistant': true, // Pro account only
           'sosSMS': true, // All accounts
           'gadgetIntegration': true, // Pro account only
           'sarDashboardWrite': true, // Pro account, Essential+ view only
           'sarAdminAccess': false,
           'satelliteMessages': 150, // Pooled for family
-          'sarParticipation': true, // Pro account
+          'sarParticipation': true,
+          'sarVolunteerRegistration': true,
+          'sarTeamManagement': false,
+          'sarMissionCoordination': true,
+          'sarAnalytics': false,
+          'multiTeamCoordination': false,
           'organizationManagement': false,
-          'aiAssistant': 'family', // Family-focused AI features
         },
         maxFamilyMembers: 5,
         essentialAccounts: 0, // Upgraded
@@ -701,21 +719,39 @@ class SubscriptionService {
 
     final limits = _currentSubscription!.plan.limits;
 
+    // Generic fallback for features that are directly represented in plan limits.
+    // - bool: true/false
+    // - int: 0 = not available, >0 = available with limit, -1 = unlimited
+    bool hasLimitFlag(String key) {
+      if (!limits.containsKey(key)) return false;
+      final v = limits[key];
+      if (v is bool) return v;
+      if (v is int) return v != 0;
+      if (v is double) return v != 0.0;
+      if (v is String) {
+        final n = int.tryParse(v);
+        if (n != null) return n != 0;
+        return v.toLowerCase() == 'true';
+      }
+      return v != null;
+    }
+
     switch (feature) {
-      case 'aiVerification':
-        return true; // All plans include AI verification
       case 'satelliteComm':
         return limits['satelliteMessages'] != 0;
       case 'sarParticipation':
-        return limits['sarParticipation'] == true;
+        return hasLimitFlag('sarParticipation');
       case 'organizationManagement':
-        return limits['organizationManagement'] == true;
-      case 'aiAssistant':
-        return limits['aiAssistant'] == true;
+        return hasLimitFlag('organizationManagement');
       case 'unlimitedSOS':
         return limits['sosAlertsPerMonth'] == -1;
+      case 'sarDashboardWrite':
+        return hasLimitFlag('sarDashboardWrite');
+      case 'sarAdminAccess':
+        return hasLimitFlag('sarAdminAccess');
       default:
-        return false;
+        // Most features are keyed directly by their limit/flag name.
+        return hasLimitFlag(feature);
     }
   }
 

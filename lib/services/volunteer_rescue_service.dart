@@ -7,11 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:redping_14v/utils/iterable_extensions.dart';
 import '../models/volunteer_participation.dart';
-import '../models/chat_message.dart';
+// chat_message import removed - no longer needed
 import 'user_profile_service.dart';
 import 'location_service.dart';
 import 'notification_service.dart';
-import 'chat_service.dart';
+// ChatService import removed - emergency messaging uses EmergencyMessagingService
 
 /// Service for managing volunteer rescue participation
 class VolunteerRescueService {
@@ -23,7 +23,7 @@ class VolunteerRescueService {
   final UserProfileService _userProfileService = UserProfileService();
   final LocationService _locationService = LocationService();
   final NotificationService _notificationService = NotificationService();
-  final ChatService _chatService = ChatService();
+  // ChatService removed - no longer used
 
   List<VolunteerParticipation> _activeParticipations = [];
   List<RiskAcknowledgment> _riskAcknowledgments = [];
@@ -350,34 +350,17 @@ class VolunteerRescueService {
           '🚗 Transportation: ${participation.hasTransportation ? 'Yes' : 'No'}\n'
           '🏠 Local Resident: ${participation.isLocalResident ? 'Yes' : 'No'}';
 
-      await _chatService.sendMessage(
-        chatId: 'mission_${participation.missionId}',
-        content: message,
-        type: MessageType.volunteerUpdate,
-        priority: MessagePriority.normal,
-        location: participation.currentLocation,
-      );
+      // Chat messaging removed - community chat now available on website only
+      debugPrint('VolunteerRescueService: Mission chat notification disabled');
     } catch (e) {
       debugPrint('VolunteerRescueService: Error notifying coordinators - $e');
     }
   }
 
-  /// Add volunteer to mission chat
+  /// Add volunteer to mission chat (disabled - community chat removed)
   Future<void> _addToVolunteerChat(VolunteerParticipation participation) async {
-    try {
-      // Create or join volunteer coordination chat
-      final chatId = 'volunteer_${participation.missionId}';
-
-      await _chatService.sendMessage(
-        chatId: chatId,
-        content:
-            '👋 ${participation.userName} joined as volunteer ${getRoleDisplayName(participation.role)}',
-        type: MessageType.announcement,
-        priority: MessagePriority.low,
-      );
-    } catch (e) {
-      debugPrint('VolunteerRescueService: Error adding to volunteer chat - $e');
-    }
+    // Community chat removed - now available on website only
+    debugPrint('VolunteerRescueService: Volunteer chat notification disabled');
   }
 
   /// Send volunteer activation message
@@ -394,11 +377,9 @@ class VolunteerRescueService {
           '⚠️ Follow all safety protocols\n'
           '🚨 Report any unsafe conditions immediately';
 
-      await _chatService.sendMessage(
-        chatId: 'volunteer_${participation.missionId}',
-        content: message,
-        type: MessageType.activation,
-        priority: MessagePriority.high,
+      // Chat messaging removed - community chat now available on website only
+      debugPrint(
+        'VolunteerRescueService: Activation chat notification disabled',
       );
     } catch (e) {
       debugPrint(
@@ -425,11 +406,9 @@ class VolunteerRescueService {
           '👋 ${participation.userName} withdrew from volunteer mission'
           '${reason != null ? '\nReason: $reason' : ''}';
 
-      await _chatService.sendMessage(
-        chatId: 'mission_${participation.missionId}',
-        content: message,
-        type: MessageType.withdrawal,
-        priority: MessagePriority.normal,
+      // Chat messaging removed - community chat now available on website only
+      debugPrint(
+        'VolunteerRescueService: Withdrawal chat notification disabled',
       );
     } catch (e) {
       debugPrint('VolunteerRescueService: Error notifying withdrawal - $e');

@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../models/sos_session.dart';
-import '../models/verification_result.dart';
+import '../models/detection_context.dart';
 import '../core/logging/app_logger.dart';
 
 /// SOS Analytics Service for tracking emergency response metrics
@@ -22,40 +22,6 @@ class SOSAnalyticsService {
 
   void enableCoordinatorLogging(bool enabled) {
     _coordinatorLoggingEnabled = enabled;
-  }
-
-  /// Log verification outcome with latency (coordinator event)
-  Future<void> logVerificationOutcomeEvent({
-    required DetectionType type,
-    required VerificationOutcome outcome,
-    required double confidence,
-    required Duration latency,
-  }) async {
-    try {
-      if (!_coordinatorLoggingEnabled) {
-        debugPrint(
-          'Analytics[coordinator]: verification outcome ${outcome.name} conf=${confidence.toStringAsFixed(2)} latency=${latency.inMilliseconds}ms',
-        );
-        return;
-      }
-      await _firestore
-          .collection('analytics')
-          .doc('coordinator_events')
-          .collection('verification')
-          .add({
-            'detectionType': type.name,
-            'outcome': outcome.name,
-            'confidence': confidence,
-            'latencyMs': latency.inMilliseconds,
-            'timestamp': FieldValue.serverTimestamp(),
-          });
-    } catch (e) {
-      AppLogger.w(
-        'Failed to log verification outcome',
-        tag: 'SOSAnalytics',
-        error: e,
-      );
-    }
   }
 
   /// Log fallback trigger (coordinator event)

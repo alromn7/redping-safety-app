@@ -297,7 +297,7 @@ class ImpactInfo extends Equatable {
   final ImpactSeverity severity;
   final String? detectionAlgorithm;
 
-  // AI Verification fields
+  // Verification fields (optional)
   final bool isVerified;
   final double? verificationConfidence;
   final String? verificationReason;
@@ -313,21 +313,6 @@ class ImpactInfo extends Equatable {
     this.verificationConfidence,
     this.verificationReason,
   });
-
-  /// Named constructor for AI verification results
-  const ImpactInfo.fromVerification({
-    required DateTime timestamp,
-    required double magnitude,
-    required LocationInfo? location,
-    required this.isVerified,
-    required this.verificationConfidence,
-    required this.verificationReason,
-    this.severity = ImpactSeverity.medium,
-    this.detectionAlgorithm = 'AI Verification',
-  }) : accelerationMagnitude = magnitude,
-       maxAcceleration = magnitude,
-       detectionTime = timestamp,
-       sensorReadings = const [];
 
   factory ImpactInfo.fromJson(Map<String, dynamic> json) =>
       _$ImpactInfoFromJson(json);

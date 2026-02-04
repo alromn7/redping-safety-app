@@ -3,7 +3,6 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/routing/app_router.dart';
 import '../../../../models/hazard_alert.dart';
-import '../../../../models/ai_assistant.dart';
 import '../../../../services/app_service_manager.dart';
 import '../widgets/hazard_alert_card.dart';
 import '../widgets/community_report_card.dart';
@@ -28,11 +27,9 @@ class _HazardAlertsPageState extends State<HazardAlertsPage>
   List<HazardAlert> _activeAlerts = [];
   List<CommunityHazardReport> _communityReports = [];
   List<WeatherAlert> _weatherAlerts = [];
-  List<AIHazardSummary> _aiHazardSummaries = [];
 
   bool _isLoading = true;
   bool _isReporting = false;
-  bool _loadingAISummary = false;
 
   @override
   void initState() {
@@ -99,37 +96,6 @@ class _HazardAlertsPageState extends State<HazardAlertsPage>
       _communityReports = _serviceManager.hazardService.communityReports;
       _weatherAlerts = _serviceManager.hazardService.weatherAlerts;
     });
-
-    // Load AI-powered hazard summary
-    _loadAIHazardSummary();
-  }
-
-  Future<void> _loadAIHazardSummary() async {
-    if (!mounted || _activeAlerts.isEmpty) {
-      setState(() => _aiHazardSummaries = []);
-      return;
-    }
-
-    setState(() => _loadingAISummary = true);
-
-    try {
-      final summaries = await _serviceManager.aiAssistantService
-          .getAIHazardSummary();
-      if (mounted) {
-        setState(() {
-          _aiHazardSummaries = summaries;
-          _loadingAISummary = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('Failed to load AI hazard summary: $e');
-      if (mounted) {
-        setState(() {
-          _aiHazardSummaries = [];
-          _loadingAISummary = false;
-        });
-      }
-    }
   }
 
   void _onHazardAlert(HazardAlert alert) {
@@ -299,17 +265,18 @@ class _HazardAlertsPageState extends State<HazardAlertsPage>
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-              controller: _tabController,
+          : Column(
               children: [
-                // Active Alerts Tab
-                _buildActiveAlertsTab(),
-
-                // Weather Alerts Tab
-                _buildWeatherAlertsTab(),
-
-                // Community Reports Tab
-                _buildCommunityReportsTab(),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildActiveAlertsTab(),
+                      _buildWeatherAlertsTab(),
+                      _buildCommunityReportsTab(),
+                    ],
+                  ),
+                ),
               ],
             ),
       floatingActionButton: Column(
@@ -358,11 +325,6 @@ class _HazardAlertsPageState extends State<HazardAlertsPage>
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // AI-Powered Hazard Summary Section
-          _buildAIHazardSummarySection(),
-
-          const SizedBox(height: 16),
-
           // Divider with label
           Row(
             children: [
@@ -487,312 +449,6 @@ class _HazardAlertsPageState extends State<HazardAlertsPage>
               style: ElevatedButton.styleFrom(backgroundColor: color),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAIHazardSummarySection() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.primaryRed.withValues(alpha: 0.1),
-            AppTheme.warningOrange.withValues(alpha: 0.05),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppTheme.primaryRed.withValues(alpha: 0.3),
-          width: 1.5,
-        ),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryRed,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.psychology,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'AI Safety Analysis',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.primaryText,
-                      ),
-                    ),
-                    Text(
-                      'Powered by Google Gemini',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: AppTheme.secondaryText,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (_loadingAISummary)
-                const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else
-                IconButton(
-                  onPressed: _loadAIHazardSummary,
-                  icon: const Icon(Icons.refresh, size: 20),
-                  tooltip: 'Refresh AI Analysis',
-                  visualDensity: VisualDensity.compact,
-                ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
-          if (_loadingAISummary)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Column(
-                  children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 12),
-                    Text(
-                      'AI analyzing hazards...',
-                      style: TextStyle(color: AppTheme.secondaryText),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else if (_aiHazardSummaries.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.safeGreen.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle, color: AppTheme.safeGreen, size: 24),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'No critical threats detected by AI',
-                      style: TextStyle(
-                        color: AppTheme.primaryText,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          else
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Top Critical Threats',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.secondaryText,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // AI Hazard Cards
-                ..._aiHazardSummaries.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final summary = entry.value;
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom: index < _aiHazardSummaries.length - 1 ? 12 : 0,
-                    ),
-                    child: _buildAIHazardCard(summary, index + 1),
-                  );
-                }),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAIHazardCard(AIHazardSummary summary, int rank) {
-    // Determine color based on severity score
-    Color severityColor;
-    if (summary.severityScore >= 8) {
-      severityColor = AppTheme.criticalRed;
-    } else if (summary.severityScore >= 6) {
-      severityColor = AppTheme.warningOrange;
-    } else {
-      severityColor = AppTheme.infoBlue;
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: severityColor.withValues(alpha: 0.3),
-          width: 1.5,
-        ),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Title Row
-          Row(
-            children: [
-              // Rank Badge
-              Container(
-                width: 24,
-                height: 24,
-                decoration: BoxDecoration(
-                  color: severityColor,
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    '$rank',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-
-              // Emoji
-              Text(summary.emoji, style: const TextStyle(fontSize: 24)),
-              const SizedBox(width: 8),
-
-              // Title
-              Expanded(
-                child: Text(
-                  summary.title,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.primaryText,
-                  ),
-                ),
-              ),
-
-              // Severity Score Badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: severityColor,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '${summary.severityScore}/10',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 10),
-
-          // Description
-          Text(
-            summary.description,
-            style: const TextStyle(
-              fontSize: 13,
-              color: AppTheme.secondaryText,
-              height: 1.4,
-            ),
-          ),
-
-          const SizedBox(height: 10),
-
-          // Distance/ETA
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppTheme.darkSurface,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.location_on, size: 14, color: severityColor),
-                const SizedBox(width: 6),
-                Text(
-                  summary.distanceEta,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: AppTheme.primaryText,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // Primary Action
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: severityColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: severityColor.withValues(alpha: 0.3),
-                width: 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.lightbulb, size: 16, color: severityColor),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    summary.primaryAction,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: severityColor,
-                      height: 1.3,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

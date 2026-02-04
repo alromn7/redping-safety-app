@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../../services/test_mode_diagnostic_service.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../services/sensor_service.dart';
 
 /// Real-time diagnostic overlay for Test Mode v2.0
 /// Displays sensor data, detection state, and threshold comparisons
@@ -185,8 +186,9 @@ class _DiagnosticOverlayState extends State<DiagnosticOverlay> {
   }
 
   Widget _buildThresholdComparison() {
-    final crashThreshold = AppConstants.getCrashThreshold();
-    final fallThreshold = AppConstants.getFallThreshold();
+    final sensor = SensorService();
+    final crashThreshold = sensor.crashThreshold;
+    final fallThreshold = sensor.fallThreshold;
     final crashProgress = (_magnitude / crashThreshold).clamp(0.0, 1.0);
     final fallProgress = (_magnitude / fallThreshold).clamp(0.0, 1.0);
 

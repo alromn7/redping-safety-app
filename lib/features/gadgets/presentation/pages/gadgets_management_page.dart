@@ -5,7 +5,9 @@ import '../../../../services/gadget_integration_service.dart';
 import '../../../../services/bluetooth_scanner_service.dart';
 import '../widgets/bluetooth_scanner_widget.dart';
 import '../widgets/qr_scanner_widget.dart';
+import 'find_my_gadget_page.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/entitlements/entitlement_service.dart';
 
 /// Page for managing gadget devices integration
 class GadgetsManagementPage extends StatefulWidget {
@@ -87,7 +89,11 @@ class _GadgetsManagementPageState extends State<GadgetsManagementPage> {
 
   Widget _buildBody() {
     if (_devices.isEmpty) {
-      return _buildEmptyState();
+      return Column(
+        children: [
+          Expanded(child: _buildEmptyState()),
+        ],
+      );
     }
 
     return Column(
@@ -429,67 +435,110 @@ class _GadgetsManagementPageState extends State<GadgetsManagementPage> {
   }
 
   Widget _buildDeviceActions(GadgetDevice device) {
-    return Row(
+    return Column(
       children: [
-        if (device.connectionStatus == GadgetConnectionStatus.disconnected)
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () => _connectDevice(device),
-              icon: const Icon(Icons.wifi, size: 16),
-              label: const Text('Connect'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.accentGreen,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
-                ),
-              ),
-            ),
-          ),
-        if (device.connectionStatus == GadgetConnectionStatus.connected) ...[
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () => _syncDevice(device),
-              icon: const Icon(Icons.sync, size: 16),
-              label: const Text('Sync'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryRed,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
+        // Find My Gadget button (if device has location tracking)
+        if (device.hasCapability(GadgetCapability.locationTracking)) ...[
+          SizedBox(
+            width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () => _disconnectDevice(device),
-              icon: const Icon(Icons.wifi_off, size: 16),
-              label: const Text('Disconnect'),
+              onPressed: () => _showFindMyGadget(device),
+              icon: const Icon(Icons.my_location, size: 16),
+              label: const Text('Find My Gadget'),
               style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.neutralGray,
-                side: BorderSide(color: AppTheme.borderColor),
+                foregroundColor: AppTheme.primaryRed,
+                side: BorderSide(color: AppTheme.primaryRed),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(6),
                 ),
               ),
             ),
           ),
+          const SizedBox(height: 8),
         ],
-        const SizedBox(width: 8),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert, color: AppTheme.neutralGray),
-          onSelected: (value) => _handleDeviceMenuAction(value, device),
-          itemBuilder: (context) => [
-            const PopupMenuItem(value: 'settings', child: Text('Settings')),
-            const PopupMenuItem(value: 'stats', child: Text('Statistics')),
-            if (!device.isPrimary)
-              const PopupMenuItem(
-                value: 'set_primary',
-                child: Text('Set as Primary'),
+        // Connection/Sync actions
+        Row(
+          children: [
+            if (device.connectionStatus == GadgetConnectionStatus.disconnected)
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _connectDevice(device),
+                  icon: const Icon(Icons.wifi, size: 16),
+                  label: const Text('Connect'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.accentGreen,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
               ),
-            const PopupMenuItem(value: 'remove', child: Text('Remove Device')),
+            if (device.connectionStatus ==
+                GadgetConnectionStatus.connected) ...[
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _syncDevice(device),
+                  icon: const Icon(Icons.sync, size: 16),
+                  label: const Text('Sync'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryRed,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _disconnectDevice(device),
+                  icon: const Icon(Icons.wifi_off, size: 16),
+                  label: const Text('Disconnect'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.neutralGray,
+                    side: BorderSide(color: AppTheme.borderColor),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(width: 8),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: AppTheme.neutralGray),
+              onSelected: (value) => _handleDeviceMenuAction(value, device),
+              itemBuilder: (context) => [
+                if (device.hasCapability(GadgetCapability.locationTracking))
+                  const PopupMenuItem(
+                    value: 'find',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.my_location,
+                          size: 18,
+                          color: AppTheme.primaryRed,
+                        ),
+                        SizedBox(width: 8),
+                        Text('Find My Gadget'),
+                      ],
+                    ),
+                  ),
+                const PopupMenuItem(value: 'settings', child: Text('Settings')),
+                const PopupMenuItem(value: 'stats', child: Text('Statistics')),
+                if (!device.isPrimary)
+                  const PopupMenuItem(
+                    value: 'set_primary',
+                    child: Text('Set as Primary'),
+                  ),
+                const PopupMenuItem(
+                  value: 'remove',
+                  child: Text('Remove Device'),
+                ),
+              ],
+            ),
           ],
         ),
       ],
@@ -761,6 +810,9 @@ class _GadgetsManagementPageState extends State<GadgetsManagementPage> {
 
   void _handleDeviceMenuAction(String action, GadgetDevice device) {
     switch (action) {
+      case 'find':
+        _showFindMyGadget(device);
+        break;
       case 'settings':
         _showDeviceSettings(device);
         break;
@@ -774,6 +826,13 @@ class _GadgetsManagementPageState extends State<GadgetsManagementPage> {
         _removeDevice(device);
         break;
     }
+  }
+
+  void _showFindMyGadget(GadgetDevice device) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => FindMyGadgetPage(device: device)),
+    );
   }
 
   void _showDeviceSettings(GadgetDevice device) {

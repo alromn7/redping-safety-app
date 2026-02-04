@@ -1,6 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter_stripe/flutter_stripe.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/subscription_tier.dart';
 import '../models/auth_user.dart' as auth show PaymentMethod;
+import '../core/config/stripe_config.dart';
 import 'subscription_service.dart';
 
 /// Payment methods supported by RedPing
@@ -157,11 +161,24 @@ class PaymentService {
 
   /// Initialize payment service
   Future<void> initialize() async {
-    debugPrint('PaymentService: Initializing...');
-    // In production: Initialize Stripe SDK
-    // await Stripe.instance.initialize(publishableKey: stripePublishableKey);
+    debugPrint(
+      'PaymentService: Initializing Stripe (${StripeConfig.isTestMode ? 'TEST' : 'LIVE'} mode)...',
+    );
+    await StripeConfig.initialize();
+
+    // Initialize Stripe SDK with proper PaymentConfiguration
+    // This MUST be done before any Stripe UI widgets (like CardField) are created
+    Stripe.publishableKey = StripeConfig.publishableKey;
+    Stripe.merchantIdentifier = StripeConfig.merchantIdentifier;
+    Stripe.urlScheme = StripeConfig.urlScheme;
+
+    // Apply settings to initialize PaymentConfiguration internally
+    await Stripe.instance.applySettings();
+
+    debugPrint('PaymentService: Stripe PaymentConfiguration initialized');
+
     await _loadSavedPaymentMethods();
-    debugPrint('PaymentService: Initialized successfully');
+    debugPrint('PaymentService: Stripe initialized successfully');
   }
 
   /// Get list of saved payment methods
@@ -182,13 +199,10 @@ class PaymentService {
     debugPrint('PaymentService: Loading saved payment methods...');
   }
 
-  /// Add a new payment method
-  ///
-  /// In production, this would:
-  /// 1. Collect card details via Stripe Elements
-  /// 2. Create payment method via Stripe API
-  /// 3. Save payment method ID to Firestore
-  /// 4. Return payment method object
+  /// Add a new payment method using Stripe SDK
+  /// NOTE: This method requires Stripe CardField widget to collect card details
+  /// The cardNumber, expMonth, expYear, cvc parameters are kept for API compatibility
+  /// but the actual card data must be collected via Stripe's CardField widget
   Future<PaymentMethod> addPaymentMethod({
     required PaymentMethodType type,
     required String cardNumber,
@@ -197,47 +211,64 @@ class PaymentService {
     required String cvc,
     bool setAsDefault = false,
   }) async {
-    debugPrint('PaymentService: Adding payment method...');
+    debugPrint('PaymentService: Adding payment method via Stripe...');
 
-    // Mock implementation for development
-    final last4 = cardNumber.length >= 4
-        ? cardNumber.substring(cardNumber.length - 4)
-        : cardNumber;
+    try {
+      // Create payment method using Stripe SDK
+      // This will use the card details from Stripe's CardField widget
+      final billingDetails = BillingDetails();
 
-    final paymentMethod = PaymentMethod(
-      id: 'pm_${DateTime.now().millisecondsSinceEpoch}',
-      type: type,
-      last4: last4,
-      brand: _detectCardBrand(cardNumber),
-      expMonth: expMonth,
-      expYear: expYear,
-      isDefault: setAsDefault || _savedPaymentMethods.isEmpty,
-    );
+      final paymentMethodParams = PaymentMethodParams.card(
+        paymentMethodData: PaymentMethodData(billingDetails: billingDetails),
+      );
 
-    _savedPaymentMethods.add(paymentMethod);
+      // Create payment method with Stripe
+      // This requires that card details were collected via CardField widget
+      final stripePaymentMethod = await Stripe.instance.createPaymentMethod(
+        params: paymentMethodParams,
+      );
 
-    if (paymentMethod.isDefault) {
-      _defaultPaymentMethod = paymentMethod;
-      // Update other methods to not be default
-      for (final method in _savedPaymentMethods) {
-        if (method.id != paymentMethod.id) {
-          _savedPaymentMethods[_savedPaymentMethods.indexOf(
-            method,
-          )] = PaymentMethod(
-            id: method.id,
-            type: method.type,
-            last4: method.last4,
-            brand: method.brand,
-            expMonth: method.expMonth,
-            expYear: method.expYear,
-            isDefault: false,
-          );
+      final last4 = stripePaymentMethod.card.last4 ?? '****';
+      final brand = stripePaymentMethod.card.brand ?? 'Unknown';
+
+      final paymentMethod = PaymentMethod(
+        id: stripePaymentMethod.id,
+        type: type,
+        last4: last4,
+        brand: brand,
+        expMonth: expMonth,
+        expYear: expYear,
+        isDefault: setAsDefault || _savedPaymentMethods.isEmpty,
+      );
+
+      _savedPaymentMethods.add(paymentMethod);
+
+      if (paymentMethod.isDefault) {
+        _defaultPaymentMethod = paymentMethod;
+        // Update other methods to not be default
+        for (final method in _savedPaymentMethods) {
+          if (method.id != paymentMethod.id) {
+            _savedPaymentMethods[_savedPaymentMethods.indexOf(
+              method,
+            )] = PaymentMethod(
+              id: method.id,
+              type: method.type,
+              last4: method.last4,
+              brand: method.brand,
+              expMonth: method.expMonth,
+              expYear: method.expYear,
+              isDefault: false,
+            );
+          }
         }
       }
-    }
 
-    debugPrint('PaymentService: Payment method added successfully');
-    return paymentMethod;
+      debugPrint('PaymentService: Payment method added successfully');
+      return paymentMethod;
+    } catch (e) {
+      debugPrint('PaymentService: Error adding payment method: $e');
+      rethrow;
+    }
   }
 
   /// Set default payment method
@@ -284,14 +315,7 @@ class PaymentService {
     debugPrint('PaymentService: Payment method removed');
   }
 
-  /// Process subscription payment
-  ///
-  /// In production, this would:
-  /// 1. Create payment intent via Cloud Function
-  /// 2. Confirm payment via Stripe SDK
-  /// 3. Handle 3D Secure if required
-  /// 4. Update subscription in Firestore
-  /// 5. Return transaction result
+  /// Process subscription payment via Stripe Cloud Function
   Future<PaymentTransaction> processSubscriptionPayment({
     required String userId,
     required SubscriptionTier tier,
@@ -300,91 +324,190 @@ class PaymentService {
   }) async {
     debugPrint('PaymentService: Processing subscription payment...');
 
-    // Get plan details
-    final plan = _subscriptionService.availablePlans.firstWhere(
-      (p) => p.tier == tier,
-    );
+    try {
+      // Get plan details
+      final plan = _subscriptionService.availablePlans.firstWhere(
+        (p) => p.tier == tier,
+      );
 
-    final amount = isYearlyBilling ? plan.yearlyPrice : plan.monthlyPrice;
+      final amount = isYearlyBilling ? plan.yearlyPrice : plan.monthlyPrice;
 
-    // Use provided payment method or default
-    final method = paymentMethodId != null
-        ? _savedPaymentMethods.firstWhere((m) => m.id == paymentMethodId)
-        : _defaultPaymentMethod;
+      // Validate payment method ID is provided
+      if (paymentMethodId == null || paymentMethodId.isEmpty) {
+        throw Exception('No payment method available');
+      }
 
-    if (method == null) {
-      throw Exception('No payment method available');
-    }
-
-    // Create transaction record
-    final transaction = PaymentTransaction(
-      id: 'txn_${DateTime.now().millisecondsSinceEpoch}',
-      userId: userId,
-      tier: tier,
-      amount: amount,
-      currency: 'USD',
-      status: PaymentStatus.processing,
-      paymentMethod: method.type,
-      createdAt: DateTime.now(),
-      isYearlyBilling: isYearlyBilling,
-    );
-
-    _transactionHistory.add(transaction);
-
-    // Mock payment processing delay
-    await Future.delayed(const Duration(seconds: 2));
-
-    // Mock successful payment (90% success rate for development)
-    final isSuccess = DateTime.now().millisecond % 10 != 0;
-
-    final completedTransaction = PaymentTransaction(
-      id: transaction.id,
-      userId: transaction.userId,
-      tier: transaction.tier,
-      amount: transaction.amount,
-      currency: transaction.currency,
-      status: isSuccess ? PaymentStatus.succeeded : PaymentStatus.failed,
-      paymentMethod: transaction.paymentMethod,
-      createdAt: transaction.createdAt,
-      completedAt: DateTime.now(),
-      errorMessage: isSuccess ? null : 'Card declined - Insufficient funds',
-      isYearlyBilling: transaction.isYearlyBilling,
-    );
-
-    // Update transaction in history
-    final index = _transactionHistory.indexWhere((t) => t.id == transaction.id);
-    _transactionHistory[index] = completedTransaction;
-
-    if (isSuccess) {
-      // Update subscription in SubscriptionService
-      await _subscriptionService.subscribeToPlan(
+      // Create transaction record
+      final transaction = PaymentTransaction(
+        id: 'txn_${DateTime.now().millisecondsSinceEpoch}',
         userId: userId,
         tier: tier,
-        paymentMethod: auth.PaymentMethod.creditCard,
+        amount: amount,
+        currency: 'AUD',
+        status: PaymentStatus.processing,
+        paymentMethod: PaymentMethodType.creditCard, // Card payment
+        createdAt: DateTime.now(),
         isYearlyBilling: isYearlyBilling,
       );
-      debugPrint('PaymentService: Payment successful - Subscription activated');
-    } else {
-      debugPrint(
-        'PaymentService: Payment failed - ${completedTransaction.errorMessage}',
-      );
-    }
 
-    return completedTransaction;
+      _transactionHistory.add(transaction);
+
+      // Check if user is properly authenticated (not anonymous)
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null || user.isAnonymous) {
+        throw Exception(
+          'Payment requires email/password authentication. '
+          'Anonymous users cannot make payments. '
+          'Please sign in with email and password.',
+        );
+      }
+
+      debugPrint(
+        'PaymentService: Calling Cloud Function with paymentMethodId: $paymentMethodId',
+      );
+      debugPrint(
+        'PaymentService: User authenticated - uid: ${user.uid}, email: ${user.email}',
+      );
+
+      // Get fresh ID token to ensure authentication
+      final idToken = await user.getIdToken();
+      debugPrint(
+        'PaymentService: ID Token obtained: ${idToken?.substring(0, 20)}...',
+      );
+
+      // Call Firebase Cloud Function to process payment
+      // Using us-central1 region (default) - match your Cloud Function deployment region
+      final result = await FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('processSubscriptionPayment')
+          .call({
+            'userId': user.uid,
+            'paymentMethodId': paymentMethodId,
+            'tier': tier.name,
+            // Amount & currency are determined by Stripe Price IDs server-side; client fields retained for trace/debug only.
+            'amount': amount,
+            'currency': 'AUD',
+            'isYearlyBilling': isYearlyBilling,
+            'savePaymentMethod': true,
+          });
+
+      debugPrint('PaymentService: Cloud Function response: ${result.data}');
+
+      if (StripeConfig.isTestMode &&
+          StripeConfig.publishableKey.startsWith('pk_live_')) {
+        debugPrint(
+          'WARNING: Live publishable key detected during test mode payment processing.',
+        );
+      }
+
+      final data = result.data as Map<String, dynamic>;
+      final isSuccess = data['success'] == true;
+
+      final completedTransaction = PaymentTransaction(
+        id: data['subscriptionId'] as String? ?? transaction.id,
+        userId: transaction.userId,
+        tier: transaction.tier,
+        amount: transaction.amount,
+        currency: transaction.currency,
+        status: isSuccess ? PaymentStatus.succeeded : PaymentStatus.failed,
+        paymentMethod: transaction.paymentMethod,
+        createdAt: transaction.createdAt,
+        completedAt: DateTime.now(),
+        errorMessage: isSuccess ? null : data['error'] as String?,
+        isYearlyBilling: transaction.isYearlyBilling,
+      );
+
+      // Update transaction in history
+      final index = _transactionHistory.indexWhere(
+        (t) => t.id == transaction.id,
+      );
+      _transactionHistory[index] = completedTransaction;
+
+      if (isSuccess) {
+        // Update subscription in SubscriptionService
+        await _subscriptionService.subscribeToPlan(
+          userId: userId,
+          tier: tier,
+          paymentMethod: auth.PaymentMethod.creditCard,
+          isYearlyBilling: isYearlyBilling,
+        );
+        debugPrint(
+          'PaymentService: Payment successful - Subscription activated',
+        );
+      } else {
+        debugPrint(
+          'PaymentService: Payment failed - ${completedTransaction.errorMessage}',
+        );
+      }
+
+      return completedTransaction;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint(
+        'PaymentService: Firebase Functions error: ${e.code} - ${e.message}',
+      );
+      debugPrint('PaymentService: Error details: ${e.details}');
+
+      // Update transaction status to failed
+      final failedTransaction = PaymentTransaction(
+        id: 'txn_${DateTime.now().millisecondsSinceEpoch}',
+        userId: userId,
+        tier: tier,
+        amount: 0.0,
+        currency: 'AUD',
+        status: PaymentStatus.failed,
+        paymentMethod: PaymentMethodType.creditCard,
+        createdAt: DateTime.now(),
+        completedAt: DateTime.now(),
+        errorMessage: 'Firebase error: ${e.code} - ${e.message}',
+        isYearlyBilling: isYearlyBilling,
+      );
+
+      _transactionHistory.add(failedTransaction);
+      return failedTransaction;
+    } catch (e) {
+      debugPrint('PaymentService: Error processing payment: $e');
+
+      // Update transaction status to failed
+      final failedTransaction = PaymentTransaction(
+        id: 'txn_${DateTime.now().millisecondsSinceEpoch}',
+        userId: userId,
+        tier: tier,
+        amount: 0.0,
+        currency: 'AUD',
+        status: PaymentStatus.failed,
+        paymentMethod: PaymentMethodType.creditCard,
+        createdAt: DateTime.now(),
+        completedAt: DateTime.now(),
+        errorMessage: e.toString(),
+        isYearlyBilling: isYearlyBilling,
+      );
+
+      _transactionHistory.add(failedTransaction);
+      rethrow;
+    }
   }
 
-  /// Cancel subscription
-  Future<void> cancelSubscription(String userId) async {
-    debugPrint('PaymentService: Cancelling subscription...');
+  /// Cancel subscription via Stripe Cloud Function
+  Future<void> cancelSubscription(String userId, String subscriptionId) async {
+    debugPrint('PaymentService: Cancelling subscription $subscriptionId...');
 
-    // In production: Cancel via Stripe API
-    // The subscription will remain active until the end of the billing period
+    try {
+      // Call Cloud Function to cancel subscription
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'cancelSubscription',
+      );
 
-    await _subscriptionService.cancelSubscription();
+      await callable.call({'userId': userId, 'subscriptionId': subscriptionId});
 
-    debugPrint(
-      'PaymentService: Subscription cancelled (effective at period end)',
-    );
+      // Update local subscription state
+      await _subscriptionService.cancelSubscription();
+
+      debugPrint(
+        'PaymentService: Subscription cancelled (effective at period end)',
+      );
+    } catch (e) {
+      debugPrint('PaymentService: Error cancelling subscription: $e');
+      rethrow;
+    }
   }
 
   /// Get upcoming invoice preview
@@ -411,7 +534,7 @@ class PaymentService {
 
     return {
       'amount': amount,
-      'currency': 'USD',
+      'currency': 'AUD',
       'dueDate': dueDate,
       'items': [
         {
@@ -420,16 +543,6 @@ class PaymentService {
         },
       ],
     };
-  }
-
-  /// Detect card brand from card number
-  String? _detectCardBrand(String cardNumber) {
-    final cleaned = cardNumber.replaceAll(' ', '');
-    if (cleaned.startsWith('4')) return 'Visa';
-    if (cleaned.startsWith(RegExp(r'^5[1-5]'))) return 'Mastercard';
-    if (cleaned.startsWith(RegExp(r'^3[47]'))) return 'Amex';
-    if (cleaned.startsWith('6')) return 'Discover';
-    return 'Unknown';
   }
 
   /// Clear all payment data (for testing)

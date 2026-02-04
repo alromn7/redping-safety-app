@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../models/redping_mode.dart';
 import '../../../../services/redping_mode_service.dart';
@@ -16,6 +17,10 @@ class RedPingModeSelectionPage extends StatefulWidget {
 class _RedPingModeSelectionPageState extends State<RedPingModeSelectionPage> {
   final List<RedPingMode> _modes = RedPingModeService.getPredefinedModes();
   ModeCategory _selectedCategory = ModeCategory.work;
+
+  Future<bool> _ensureRedPingModeAccess() async {
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -348,8 +353,7 @@ class _RedPingModeSelectionPageState extends State<RedPingModeSelectionPage> {
               _buildDetailSection('Emergency Response', Icons.emergency, [
                 'SOS Countdown: ${mode.emergencyConfig.sosCountdown.inSeconds}s',
                 'Rescue Type: ${_formatRescueType(mode.emergencyConfig.preferredRescue)}',
-                if (mode.emergencyConfig.autoCallEmergency)
-                  '✓ Auto-call emergency services',
+                'Emergency hotline: manual dial',
               ]),
               const SizedBox(height: 16),
               if (mode.activeHazardTypes.isNotEmpty)
@@ -373,14 +377,28 @@ class _RedPingModeSelectionPageState extends State<RedPingModeSelectionPage> {
             child: ElevatedButton(
               onPressed: () async {
                 Navigator.pop(context);
-                await modeService.activateMode(mode);
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('${mode.name} activated'),
-                      backgroundColor: AppTheme.safeGreen,
-                    ),
-                  );
+                final hasAccess = await _ensureRedPingModeAccess();
+                if (!hasAccess) return;
+
+                try {
+                  await modeService.activateMode(mode);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('${mode.name} activated'),
+                        backgroundColor: AppTheme.safeGreen,
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Unable to activate mode: $e'),
+                        backgroundColor: AppTheme.primaryRed,
+                      ),
+                    );
+                  }
                 }
               },
               style: ElevatedButton.styleFrom(

@@ -52,6 +52,7 @@ void main() async {
           'status': 'resolved',
           'endTime': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
+          'resolvedAt': FieldValue.serverTimestamp(),
           'resolvedBy': 'system_cleanup',
           'resolutionNotes':
               'Batch cleanup - preparing for SOS rule enforcement',
@@ -118,6 +119,7 @@ void main() async {
         await doc.reference.update({
           'status': 'resolved',
           'lastUpdate': DateTime.now().toIso8601String(),
+          'resolvedAt': FieldValue.serverTimestamp(),
         });
 
         sosPingsUpdated++;

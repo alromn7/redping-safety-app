@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/sos_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'sos_service.dart';
@@ -19,13 +20,11 @@ import 'volunteer_rescue_service.dart';
 import 'sar_organization_service.dart';
 import 'rescue_response_service.dart';
 import 'help_assistant_service.dart';
-// phone_ai_service removed - AI emergency calls disabled
-import 'phone_ai_integration_service.dart';
-import 'ai_assistant_service.dart';
+// Voice integration service (stubbed in Phase 1 optimization)
+import 'phone_voice_integration_service.dart';
 import 'activity_service.dart';
 import 'privacy_security_service.dart';
 import 'auth_service.dart';
-import 'subscription_service.dart';
 import 'feature_access_service.dart';
 import 'battery_optimization_service.dart';
 import 'performance_monitoring_service.dart';
@@ -41,13 +40,15 @@ import 'gadget_integration_service.dart';
 import 'google_cloud_api_service.dart';
 // import 'websocket_communication_service.dart';
 import 'performance_optimization_service.dart';
+import 'visibility_migration_service.dart';
+import '../core/app_variant.dart';
 import 'firebase_service.dart';
 import 'redping_mode_service.dart';
 import 'location_sharing_service.dart';
-import 'emergency_detection_service.dart';
 import 'safety_monitor_service.dart';
 import 'offline_sos_queue_service.dart';
 import 'legal_documents_service.dart';
+import 'network_safety_alert_service.dart';
 import '../models/sar_identity.dart';
 import 'platform_sms_sender_service.dart';
 import '../security/secure_storage_service.dart';
@@ -56,6 +57,13 @@ import '../config/env.dart';
 
 /// Central service manager that coordinates all app services
 class AppServiceManager {
+  // App variant (Emergency or SAR) to control initialization paths
+  AppVariant _variant = AppVariant.emergency;
+  AppVariant get variant => _variant;
+  void setVariant(AppVariant variant) {
+    _variant = variant;
+  }
+
   /// Lightweight startup verification to avoid heavy work and log spam
   /// Only checks critical permissions/services quickly.
   Future<void> verifyAllServicesAtStartup() async {
@@ -94,14 +102,12 @@ class AppServiceManager {
   final SAROrganizationService _organizationService = SAROrganizationService();
   final RescueResponseService _rescueResponseService = RescueResponseService();
   final HelpAssistantService _helpAssistantService = HelpAssistantService();
-  // PhoneAIService removed - AI emergency calls disabled
-  PhoneAIIntegrationService? _phoneAIIntegrationService;
-  final AIAssistantService _aiAssistantService = AIAssistantService();
+  // Voice integration service (stub)
+  PhoneVoiceIntegrationService? _phoneVoiceIntegrationService;
   final ActivityService _activityService = ActivityService();
   final PrivacySecurityService _privacySecurityService =
       PrivacySecurityService();
   final AuthService _authService = AuthService.instance;
-  final SubscriptionService _subscriptionService = SubscriptionService.instance;
   final FeatureAccessService _featureAccessService =
       FeatureAccessService.instance;
   final BatteryOptimizationService _batteryOptimizationService =
@@ -128,25 +134,15 @@ class AppServiceManager {
   final FirebaseService _firebaseService = FirebaseService();
   final LocationSharingService _locationSharingService =
       LocationSharingService();
-  final EmergencyDetectionService _emergencyDetectionService =
-      EmergencyDetectionService();
   final SafetyMonitorService _safetyMonitorService = SafetyMonitorService();
   final OfflineSOSQueueService _offlineSOSQueueService =
       OfflineSOSQueueService();
   final LegalDocumentsService _legalDocumentsService = LegalDocumentsService();
+    final NetworkSafetyAlertService _networkSafetyAlertService =
+      NetworkSafetyAlertService();
 
   bool _isInitialized = false;
   bool _isAppInForeground = true;
-
-  // AI Safety Assistant state (user preference + auto activation)
-  bool _aiSafetyAssistantUserEnabled = false; // persisted, default OFF
-  bool _aiSafetyAssistantAutoActive = false; // runtime auto state
-  DateTime? _lastMovementTime;
-  Timer? _aiSafetyAutoTimer;
-  static const double _aiSafetyAutoOnSpeedMps = 16.67; // 60 km/h
-  static const double _idleSpeedMps = 0.5; // ~stationary threshold
-  static const Duration _aiSafetyIdleTimeout = Duration(minutes: 5);
-  Timer? _aiSafetyTempTimer;
 
   // Global app state callbacks
   Function(SOSSession)? _onSOSActivated;
@@ -173,15 +169,12 @@ class AppServiceManager {
   SAROrganizationService get organizationService => _organizationService;
   RescueResponseService get rescueResponseService => _rescueResponseService;
   HelpAssistantService get helpAssistantService => _helpAssistantService;
-  // PhoneAIService removed - AI emergency calls disabled
-  // AI Integration Service removed - emergency calls handled via SMS only
-  PhoneAIIntegrationService get phoneAIIntegrationService =>
-      _phoneAIIntegrationService ??= PhoneAIIntegrationService();
-  AIAssistantService get aiAssistantService => _aiAssistantService;
+    // Voice integration service (stub)
+    PhoneVoiceIntegrationService get phoneVoiceIntegrationService =>
+      _phoneVoiceIntegrationService ??= PhoneVoiceIntegrationService();
   ActivityService get activityService => _activityService;
   PrivacySecurityService get privacySecurityService => _privacySecurityService;
   AuthService get authService => _authService;
-  SubscriptionService get subscriptionService => _subscriptionService;
   FeatureAccessService get featureAccessService => _featureAccessService;
   BatteryOptimizationService get batteryOptimizationService =>
       _batteryOptimizationService;
@@ -205,11 +198,11 @@ class AppServiceManager {
       _performanceOptimizationService;
   FirebaseService get firebaseService => _firebaseService;
   LocationSharingService get locationSharingService => _locationSharingService;
-  EmergencyDetectionService get emergencyDetectionService =>
-      _emergencyDetectionService;
   SafetyMonitorService get safetyMonitorService => _safetyMonitorService;
   OfflineSOSQueueService get offlineSOSQueueService => _offlineSOSQueueService;
   LegalDocumentsService get legalDocumentsService => _legalDocumentsService;
+  NetworkSafetyAlertService get networkSafetyAlertService =>
+      _networkSafetyAlertService;
 
   // Public getters for state
   bool get isInitialized => _isInitialized;
@@ -284,7 +277,9 @@ class AppServiceManager {
       score++;
     }
 
-    return totalChecks > 0 ? (score * 100.0 / totalChecks) : 0.0;
+    // Return a normalized readiness score in the range 0.0..1.0.
+    // Callers commonly apply thresholds like 0.7 and display percentage via * 100.
+    return totalChecks > 0 ? (score / totalChecks) : 0.0;
   }
 
   Future<void> triggerFullSystemTest() async {
@@ -293,8 +288,25 @@ class AppServiceManager {
 
       // Test all services
       await _sosService.initialize();
-      // Disable sensor monitoring to reduce CPU load when not in SOS mode
-      // await _sensorService.startMonitoring();
+
+      // Start sensor monitoring for ACFD in the emergency variant.
+      if (_variant == AppVariant.emergency) {
+        await _sensorService.startMonitoring(
+          locationService: _locationService,
+          notificationService: _notificationService,
+          lowPowerMode: true,
+        );
+        debugPrint(
+          'AppServiceManager: ✅ ACFD enabled - sensor monitoring started',
+        );
+      } else {
+        debugPrint(
+          _variant == AppVariant.sar
+              ? 'AppServiceManager: ℹ️ SAR variant - sensor monitoring skipped'
+              : 'AppServiceManager: ℹ️ Sensor monitoring skipped for non-emergency variant',
+        );
+      }
+
       await _locationService.initialize();
       await _contactsService.initialize();
       await _profileService.initialize();
@@ -347,6 +359,7 @@ class AppServiceManager {
     _contactsService.dispose();
     _profileService.dispose();
     _notificationService.dispose();
+    _networkSafetyAlertService.dispose();
     _sarService.dispose();
     _hazardService.dispose();
     _chatService.dispose();
@@ -357,12 +370,11 @@ class AppServiceManager {
     _rescueResponseService.dispose();
     _helpAssistantService.dispose();
     // _phoneAIService.dispose(); // removed
-    // AI Integration Service removed
+    // In-app assistant integration removed
     _activityService.dispose();
     _privacySecurityService.dispose();
     // _legalDocumentsService.dispose(); // No dispose method
     _authService.dispose();
-    _subscriptionService.dispose();
     // _featureAccessService.dispose(); // No dispose method
     _batteryOptimizationService.dispose();
     _performanceMonitoringService.dispose();
@@ -378,7 +390,6 @@ class AppServiceManager {
     _performanceOptimizationService.dispose();
     _firebaseService.dispose();
     _locationSharingService.dispose();
-    _emergencyDetectionService.dispose();
     _safetyMonitorService.dispose();
     _offlineSOSQueueService.dispose();
     // _nativeMapService.dispose(); // No dispose method
@@ -413,9 +424,6 @@ class AppServiceManager {
 
       // Initialize only essential services first
       await _profileService.initialize();
-
-      // Initialize subscription service (needed for access controls)
-      await _subscriptionService.initialize();
 
       // Initialize feature access service AFTER subscription service
       _featureAccessService.initialize();
@@ -453,7 +461,7 @@ class AppServiceManager {
         });
       }
 
-      // AI Emergency Call Service removed - SMS notifications handle emergency alerts
+      // Auto-call service removed - SMS notifications handle emergency alerts
 
       // Initialize WebSocket communication
       // await _websocketService.initialize();
@@ -464,11 +472,21 @@ class AppServiceManager {
       // Initialize Firebase service
       await _firebaseService.initialize();
 
+      // Route hazard-alert push messages (topic: hazard_alerts) into HazardAlertService.
+      // This enables hazard alerts to appear in-app (not just as notifications).
+      _firebaseService.setHazardAlertCallback((data) async {
+        try {
+          await _hazardService.ingestRemoteHazardAlert(
+            data,
+            showNotification: false,
+          );
+        } catch (e) {
+          debugPrint('AppServiceManager: Hazard alert ingest failed - $e');
+        }
+      });
+
       // Initialize location sharing service
       await _locationSharingService.initialize();
-
-      // Initialize emergency detection service
-      await _emergencyDetectionService.initialize();
 
       // Initialize RedPing Mode service
       await RedPingModeService().initialize();
@@ -493,6 +511,19 @@ class AppServiceManager {
                   _sosService.currentSession ??
                   _buildMinimalSessionForSMS();
               await _contactsService.openSMSComposerForEnabledContacts(session);
+            } else if (payload.startsWith('offline_sos_share:')) {
+              final sessionId = payload.split(':').last;
+              final queued = _offlineSOSQueueService.getSessionById(sessionId);
+              final session = queued ?? _sosService.currentSession;
+              if (session == null) return;
+
+              final message = _contactsService.buildEmergencyAlertMessage(
+                session,
+              );
+              await Share.share(
+                message,
+                subject: 'RedPing SOS Alert',
+              );
             }
           } catch (e) {
             debugPrint(
@@ -510,21 +541,22 @@ class AppServiceManager {
       // Initialize location service (essential for SOS)
       await _locationService.initialize();
 
+      // Start network safety alerts (no network / overseas / non-Starlink carrier)
+      try {
+        await _networkSafetyAlertService.initialize(
+          locationService: _locationService,
+          notificationService: _notificationService,
+        );
+      } catch (e) {
+        debugPrint(
+          'AppServiceManager: NetworkSafetyAlertService init failed (continuing) - $e',
+        );
+      }
+
       // Start safety monitor after location permission is ready
       try {
         await _safetyMonitorService.startMonitoring();
       } catch (_) {}
-
-      // Load and apply AI Safety Assistant preferences + start auto controller
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        _aiSafetyAssistantUserEnabled =
-            prefs.getBool('ai_safety_assistant_enabled') ??
-            false; // default OFF
-        _setupAISafetyAssistantAutomation();
-      } catch (e) {
-        debugPrint('AppServiceManager: AI Safety Assistant prefs error - $e');
-      }
 
       // Initialize offline SOS queue (ensures queued delivery when back online)
       try {
@@ -537,6 +569,14 @@ class AppServiceManager {
       await _contactsService.initialize();
       await _sosService.initialize();
 
+      // One-time visibility backfill for existing active SOS session
+      try {
+        await VisibilityMigrationService()
+            .backfillAllowedViewersForActiveSession();
+      } catch (e) {
+        debugPrint('AppServiceManager: Visibility backfill skipped - $e');
+      }
+
       // If user opted-in, proactively request Android SMS permission at startup
       // to ensure automatic emergency SMS can send without interruption.
       // This is a no-op on non-Android platforms or if already granted.
@@ -544,15 +584,6 @@ class AppServiceManager {
         await _preflightSmsPermissionIfEnabled();
       } catch (e) {
         debugPrint('AppServiceManager: SMS preflight skipped - $e');
-      }
-
-      // Initialize phone AI integration (voice commands, TTS) with DI to avoid cycles
-      try {
-        await phoneAIIntegrationService.initialize(serviceManager: this);
-      } catch (e) {
-        debugPrint(
-          'AppServiceManager: PhoneAIIntegrationService init skipped - $e',
-        );
       }
 
       // Initialize native map service
@@ -666,11 +697,23 @@ class AppServiceManager {
 
   /// Initialize first batch of services (most critical)
   Future<void> _initializeServiceBatch1() async {
-    await _sensorService.startMonitoring(
-      locationService: _locationService,
-      notificationService: _notificationService,
-      lowPowerMode: true,
-    );
+    // Start sensor monitoring for ACFD in the emergency variant.
+    if (_variant == AppVariant.emergency) {
+      await _sensorService.startMonitoring(
+        locationService: _locationService,
+        notificationService: _notificationService,
+        lowPowerMode: true,
+      );
+      debugPrint(
+        'AppServiceManager: ✅ ACFD enabled - sensor monitoring started',
+      );
+    } else {
+      debugPrint(
+        _variant == AppVariant.sar
+            ? 'AppServiceManager: ℹ️ SAR variant - sensor monitoring skipped'
+            : 'AppServiceManager: ℹ️ Sensor monitoring skipped for non-emergency variant',
+      );
+    }
 
     // Apply user-configured detection settings (sensitivity & toggles)
     try {
@@ -789,14 +832,6 @@ class AppServiceManager {
     await _sosPingService.initialize();
     await _messagingIntegrationService.initialize();
     await _gadgetIntegrationService.initialize();
-
-    // Initialize AI Assistant Service with dependencies
-    await _aiAssistantService.initialize(
-      serviceManager: this,
-      notificationService: _notificationService,
-      userProfileService: _profileService,
-      locationService: _locationService,
-    );
   }
 
   /// Handle app lifecycle changes
@@ -820,98 +855,5 @@ class AppServiceManager {
         debugPrint('AppServiceManager: App hidden');
         break;
     }
-  }
-
-  // ================= AI SAFETY ASSISTANT (Toggle + Auto) =================
-  /// Returns whether AI Safety Assistant should be actively monitoring now
-  /// Combines user preference and auto-on rule (speed > 60 km/h)
-  bool get isAISafetyAssistantActive =>
-      _aiSafetyAssistantUserEnabled || _aiSafetyAssistantAutoActive;
-
-  /// Returns the stored user preference (manual toggle)
-  bool get isAISafetyAssistantUserEnabled => _aiSafetyAssistantUserEnabled;
-
-  /// Update the user preference and persist; applies immediately
-  Future<void> setAISafetyAssistantUserEnabled(bool enabled) async {
-    _aiSafetyAssistantUserEnabled = enabled;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('ai_safety_assistant_enabled', enabled);
-    } catch (_) {}
-    _applyAISafetyAssistantState();
-    _onSettingsChanged?.call();
-  }
-
-  void _setupAISafetyAssistantAutomation() {
-    // Seed last movement time to now to avoid premature idle-off
-    _lastMovementTime ??= DateTime.now();
-
-    // Periodic controller: check current speed + idle timeout every 10s
-    _aiSafetyAutoTimer?.cancel();
-    _aiSafetyAutoTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      try {
-        final speed =
-            _locationService.currentLocationInfo?.speed ??
-            _locationService.currentPosition?.speed ??
-            0.0; // m/s
-
-        // Track movement for idle detection
-        if (speed >= _idleSpeedMps) {
-          _lastMovementTime = DateTime.now();
-        }
-
-        // Auto ON when speed >= 60 km/h
-        final shouldAutoOn = speed >= _aiSafetyAutoOnSpeedMps;
-
-        // Auto OFF when idle for >= 5 minutes
-        final now = DateTime.now();
-        final isIdleTooLong =
-            _lastMovementTime != null &&
-            now
-                    .difference(_lastMovementTime!)
-                    .compareTo(_aiSafetyIdleTimeout) >=
-                0;
-
-        bool newAutoActive = _aiSafetyAssistantAutoActive;
-        if (shouldAutoOn) {
-          newAutoActive = true;
-        } else if (isIdleTooLong) {
-          newAutoActive = false;
-        }
-
-        if (newAutoActive != _aiSafetyAssistantAutoActive) {
-          _aiSafetyAssistantAutoActive = newAutoActive;
-          _applyAISafetyAssistantState();
-        }
-      } catch (e) {
-        // Non-fatal; keep previous state
-        debugPrint('AI Safety Auto Controller error: $e');
-      }
-    });
-
-    // Apply initial state at startup
-    _applyAISafetyAssistantState();
-  }
-
-  void _applyAISafetyAssistantState() {
-    final active = isAISafetyAssistantActive;
-    try {
-      // Gate AI verification background monitoring (ACFD will still trigger verification when needed)
-      _sensorService.aiVerificationService?.setMonitoring(active);
-    } catch (e) {
-      debugPrint('AppServiceManager: Failed to apply AI safety state - $e');
-    }
-  }
-
-  /// Force-activate AI Safety Assistant for a limited time (e.g., during ACFD window)
-  void temporarilyActivateAISafetyAssistant(Duration duration) {
-    _aiSafetyAssistantAutoActive = true;
-    _applyAISafetyAssistantState();
-    _aiSafetyTempTimer?.cancel();
-    _aiSafetyTempTimer = Timer(duration, () {
-      // Let the periodic controller decide, but remove the temporary force if speed/idle rules don't keep it on
-      _aiSafetyAssistantAutoActive = false;
-      _applyAISafetyAssistantState();
-    });
   }
 }

@@ -12,6 +12,8 @@ import android.graphics.Color
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import android.Manifest
 import androidx.core.app.ServiceCompat
 
 class RedpingForegroundService : Service() {
@@ -34,13 +36,24 @@ class RedpingForegroundService : Service() {
         val text = intent?.getStringExtra("text") ?: "Monitoring for SOS delivery"
         val notification = buildNotification(title, text)
         
-        // For Android 14+ (API 34+), must specify foreground service type
+        // For Android 14+ (API 34+), must specify foreground service type.
+        // Use LOCATION type only if location permissions are granted; otherwise fall back to DATA_SYNC only
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val hasFine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasCoarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasLocation = hasFine || hasCoarse
+
+            val fgsType = if (hasLocation) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
+
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                fgsType
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)

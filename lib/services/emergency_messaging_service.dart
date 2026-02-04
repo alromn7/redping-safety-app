@@ -9,9 +9,11 @@ import 'package:geocoding/geocoding.dart' as geocoding;
 import '../models/emergency_message.dart';
 import '../core/logging/app_logger.dart';
 import '../models/emergency_contact.dart';
+import '../models/messaging/message_packet.dart' as msg;
 import 'auth_service.dart';
 import 'connectivity_monitor_service.dart';
 import 'app_service_manager.dart';
+import 'messaging_initializer.dart';
 
 /// Service for managing emergency messaging with online/offline capability
 class EmergencyMessagingService {
@@ -19,6 +21,9 @@ class EmergencyMessagingService {
       EmergencyMessagingService._internal();
   factory EmergencyMessagingService() => _instance;
   EmergencyMessagingService._internal();
+
+  // Messaging system
+  final MessagingInitializer _messaging = MessagingInitializer();
 
   // State
   bool _isInitialized = false;
@@ -50,6 +55,14 @@ class EmergencyMessagingService {
     if (_isInitialized) return;
 
     try {
+      // Initialize new messaging system
+      await _messaging.initialize();
+
+      // Listen to received messages from new system
+      _messaging.engine.receivedStream.listen((packet) {
+        _handleReceivedPacket(packet);
+      });
+
       // Load existing messages
       await _loadMessages();
       await _loadOfflineQueue();
@@ -103,6 +116,94 @@ class EmergencyMessagingService {
     // when the device is back online.
   }
 
+  /// Handle received message packet from new messaging system
+  Future<void> _handleReceivedPacket(msg.MessagePacket packet) async {
+    try {
+      // Get conversation key to decrypt
+      final conversationKey = await _messaging.crypto.getConversationKey(
+        packet.conversationId,
+      );
+      if (conversationKey == null) {
+        AppLogger.w(
+          'No conversation key for ${packet.conversationId}',
+          tag: 'EmergencyMessagingService',
+        );
+        return;
+      }
+
+      // Decrypt the content
+      final content = await _messaging.crypto.decryptMessage(
+        packet.encryptedPayload,
+        conversationKey,
+      );
+
+      // Get sender name from metadata
+      final senderName = packet.metadata['senderName'] as String? ?? 'Unknown';
+
+      // Convert to EmergencyMessage for compatibility
+      final message = EmergencyMessage(
+        id: packet.messageId,
+        senderId: packet.senderId,
+        senderName: senderName,
+        content: content,
+        recipients: List<String>.from(packet.recipients),
+        timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
+        priority: _convertPriorityFromString(packet.priority),
+        type: _convertTypeFromString(packet.type),
+        status: MessageStatus.sent,
+        isRead: false,
+        metadata: packet.metadata,
+      );
+
+      // Add to messages list
+      await _saveMessage(message);
+      _messages.add(message);
+      _messagesController.add(_messages);
+      _onMessageSent?.call(message);
+
+      AppLogger.i(
+        'Received message via new system - ${message.id}',
+        tag: 'EmergencyMessagingService',
+      );
+    } catch (e) {
+      AppLogger.w(
+        'Error handling received packet',
+        tag: 'EmergencyMessagingService',
+        error: e,
+      );
+    }
+  }
+
+  /// Convert priority string to legacy MessagePriority
+  MessagePriority _convertPriorityFromString(String priority) {
+    switch (priority) {
+      case 'emergency':
+        return MessagePriority.high;
+      case 'high':
+        return MessagePriority.high;
+      case 'normal':
+        return MessagePriority.medium;
+      default:
+        return MessagePriority.medium;
+    }
+  }
+
+  /// Convert type string to legacy MessageType
+  MessageType _convertTypeFromString(String type) {
+    switch (type) {
+      case 'text':
+        return MessageType.general;
+      case 'sos':
+        return MessageType.emergency;
+      case 'location':
+        return MessageType.status;
+      case 'system':
+        return MessageType.response;
+      default:
+        return MessageType.general;
+    }
+  }
+
   /// Receive message from SAR
   Future<void> receiveMessageFromSAR({
     required String senderId,
@@ -145,121 +246,136 @@ class EmergencyMessagingService {
     }
   }
 
-  /// Send emergency message
+  /// Send emergency message using new MessageEngine
+  /// This fixes the infinite loop bug by using global message deduplication
   Future<bool> sendEmergencyMessage({
     required String content,
     required List<EmergencyContact> recipients,
     MessagePriority priority = MessagePriority.high,
     MessageType type = MessageType.emergency,
   }) async {
-    // --- START: NEW Firestore Integration Logic ---
-    if (_isOnline) {
-      try {
-        // 1. Get current location
-        Position position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
-
-        // 2. Reverse-geocode to human-readable address (best-effort)
-        String? address;
-        try {
-          final placemarks = await geocoding
-              .placemarkFromCoordinates(position.latitude, position.longitude)
-              .timeout(const Duration(seconds: 6));
-          if (placemarks.isNotEmpty) {
-            final p = placemarks.first;
-            final parts = <String?>[
-              p.name,
-              p.street,
-              p.locality,
-              p.administrativeArea,
-              p.country,
-            ].where((e) => (e ?? '').trim().isNotEmpty).cast<String>().toList();
-            address = parts.join(', ');
-          }
-        } catch (_) {
-          // best-effort only
-        }
-
-        // 3. Construct the SOS session data
-        final authUserId = AuthService.instance.isAuthenticated
-            ? AuthService.instance.currentUser.id
-            : 'anonymous_user';
-        final sosData = <String, dynamic>{
-          'userId': authUserId,
-          'status': 'active',
-          'type': 'medical', // or 'manual', 'crash', 'fall' based on trigger
-          'priority': 'high',
-          'userMessage': content,
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-          'location': {
-            'latitude': position.latitude,
-            'longitude': position.longitude,
-            'accuracy': position.accuracy,
-            'timestamp': FieldValue.serverTimestamp(),
-            if (address != null) 'address': address,
-          },
-        };
-
-        // 4. Send data to Firestore
-        await FirebaseFirestore.instance
-            .collection('sos_sessions')
-            .add(sosData);
-
-        AppLogger.i(
-          'Successfully sent SOS to Firestore.',
-          tag: 'EmergencyMessagingService',
-        );
-
-        // --- After successful Firestore write, proceed with original local logic ---
-      } catch (e) {
-        AppLogger.w(
-          'FAILED to send SOS to Firestore',
-          tag: 'EmergencyMessagingService',
-          error: e,
-        );
-        // If Firestore fails, we fall back to the original offline queuing logic.
-        // The original code below will handle it.
-      }
-    }
-    // --- END: NEW Firestore Integration Logic ---
-
     try {
-      final message = EmergencyMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        senderId: 'current_user', // Would get from user profile
-        senderName: 'You',
+      // Get current user info
+      final authUserId = AuthService.instance.isAuthenticated
+          ? AuthService.instance.currentUser.id
+          : 'anonymous_user';
+      final userName = AuthService.instance.isAuthenticated
+          ? (AuthService.instance.currentUser.displayName.isEmpty
+                ? 'You'
+                : AuthService.instance.currentUser.displayName)
+          : 'Anonymous User';
+
+      // Create SOS session in Firestore if online (legacy compatibility)
+      if (_isOnline) {
+        try {
+          // Get current location
+          Position position = await Geolocator.getCurrentPosition(
+            // Prefer GPS-first to avoid Wi‑Fi accuracy prompt on Android
+            desiredAccuracy: LocationAccuracy.bestForNavigation,
+          );
+
+          // Reverse-geocode to human-readable address (best-effort)
+          String? address;
+          try {
+            final placemarks = await geocoding
+                .placemarkFromCoordinates(position.latitude, position.longitude)
+                .timeout(const Duration(seconds: 6));
+            if (placemarks.isNotEmpty) {
+              final p = placemarks.first;
+              final parts =
+                  <String?>[
+                        p.name,
+                        p.street,
+                        p.locality,
+                        p.administrativeArea,
+                        p.country,
+                      ]
+                      .where((e) => (e ?? '').trim().isNotEmpty)
+                      .cast<String>()
+                      .toList();
+              address = parts.join(', ');
+            }
+          } catch (_) {
+            // best-effort only
+          }
+
+          // Create SOS session data
+          final sosData = <String, dynamic>{
+            'userId': authUserId,
+            'status': 'active',
+            'type': type == MessageType.emergency ? 'medical' : 'manual',
+            'priority': _convertPriorityToString(priority),
+            'userMessage': content,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+            'location': {
+              'latitude': position.latitude,
+              'longitude': position.longitude,
+              'accuracy': position.accuracy,
+              'timestamp': FieldValue.serverTimestamp(),
+              if (address != null) 'address': address,
+            },
+          };
+
+          // Send to Firestore
+          await FirebaseFirestore.instance
+              .collection('sos_sessions')
+              .add(sosData);
+
+          AppLogger.i(
+            'Successfully sent SOS to Firestore',
+            tag: 'EmergencyMessagingService',
+          );
+        } catch (e) {
+          AppLogger.w(
+            'Failed to send SOS to Firestore (will still send via new system)',
+            tag: 'EmergencyMessagingService',
+            error: e,
+          );
+        }
+      }
+
+      // Use new MessageEngine for actual message delivery
+      // This handles encryption, deduplication, and offline queue
+      final recipientIds = recipients.map((c) => c.id).toList();
+      final conversationId =
+          'emergency_${authUserId}_${DateTime.now().millisecondsSinceEpoch}';
+
+      final packet = await _messaging.engine.sendMessage(
+        conversationId: conversationId,
         content: content,
-        recipients: recipients.map((c) => c.id).toList(),
-        timestamp: DateTime.now(),
+        type: msg.MessageType.sos,
+        priority: msg.MessagePriority.emergency,
+        recipients: recipientIds,
+        metadata: {
+          'senderName': userName,
+          'legacyType': type.name,
+          'legacyPriority': priority.name,
+        },
+      );
+
+      // Create local EmergencyMessage for compatibility
+      final message = EmergencyMessage(
+        id: packet.messageId,
+        senderId: authUserId,
+        senderName: userName,
+        content: content,
+        recipients: recipientIds,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
         priority: priority,
         type: type,
-        status: _isOnline ? MessageStatus.sent : MessageStatus.pending,
+        status: MessageStatus.sent,
         isRead: false,
       );
 
-      if (_isOnline) {
-        // Send immediately
-        final success = await _sendToRecipients(message, recipients);
-        if (success) {
-          final sentMessage = message.copyWith(status: MessageStatus.sent);
-          await _saveMessage(sentMessage);
-          _messages.add(sentMessage);
-          _messagesController.add(_messages);
-          _onMessageSent?.call(sentMessage);
-        } else {
-          final failedMessage = message.copyWith(status: MessageStatus.failed);
-          await _addToOfflineQueue(failedMessage);
-        }
-      } else {
-        // Add to offline queue
-        final pendingMessage = message.copyWith(status: MessageStatus.pending);
-        await _addToOfflineQueue(pendingMessage);
-      }
+      // Save locally
+      await _saveMessage(message);
+      _messages.add(message);
+      _messagesController.add(_messages);
+      _onMessageSent?.call(message);
 
       AppLogger.i(
-        'Message sent - ${message.id}',
+        'Message sent via new system - ${message.id}',
         tag: 'EmergencyMessagingService',
       );
       return true;
@@ -270,6 +386,20 @@ class EmergencyMessagingService {
         error: e,
       );
       return false;
+    }
+  }
+
+  /// Convert legacy priority to string for Firestore
+  String _convertPriorityToString(MessagePriority priority) {
+    switch (priority) {
+      case MessagePriority.low:
+        return 'low';
+      case MessagePriority.medium:
+        return 'medium';
+      case MessagePriority.high:
+        return 'high';
+      case MessagePriority.critical:
+        return 'critical';
     }
   }
 

@@ -221,8 +221,8 @@ class FamilyValueCard extends StatelessWidget {
                 'Get alerts from family emergencies',
               ),
               _buildFamilyBenefit(
-                'Family Chat',
-                'Private family communication channel',
+                'Family Portal Messaging',
+                'Not available in-app in this build',
               ),
             ],
           ),

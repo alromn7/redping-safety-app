@@ -7,6 +7,7 @@ import '../models/user_profile.dart';
 import '../services/auth_service.dart';
 import '../services/emergency_contacts_service.dart';
 import '../services/location_service.dart';
+import '../services/connectivity_monitor_service.dart';
 
 /// Repository responsible for persisting SOS sessions to Firestore.
 /// Centralizes create/update logic and ensures data is safe for Firestore.
@@ -54,7 +55,7 @@ class SosRepository {
       _cleanFirestoreData(data);
       await ref.add(data);
     } catch (e) {
-      debugPrint('SosRepository: Failed to add location ping - $e');
+      _maybeLogOfflineError('add location ping', e);
     }
   }
 
@@ -79,7 +80,7 @@ class SosRepository {
       _cleanFirestoreData(update);
       await ref.set(update, SetOptions(merge: true));
     } catch (e) {
-      debugPrint('SosRepository: Failed to update latest location - $e');
+      _maybeLogOfflineError('update latest location', e);
     }
   }
 
@@ -150,7 +151,7 @@ class SosRepository {
       }, SetOptions(merge: true));
       debugPrint('SosRepository: Cleared activeSessionId pointer for $userId');
     } catch (e) {
-      debugPrint('SosRepository: Failed to clear active session pointer - $e');
+      _maybeLogOfflineError('clear active session pointer', e);
     }
   }
 
@@ -167,7 +168,7 @@ class SosRepository {
         'SosRepository: Set activeSessionId pointer to $sessionId for $userId',
       );
     } catch (e) {
-      debugPrint('SosRepository: Failed to set active session pointer - $e');
+      _maybeLogOfflineError('set active session pointer', e);
     }
   }
 
@@ -238,7 +239,7 @@ class SosRepository {
       );
       return session;
     } catch (e) {
-      debugPrint('SosRepository: Error getting active session - $e');
+      _maybeLogOfflineError('get active session', e);
       return null;
     }
   }
@@ -429,10 +430,25 @@ class SosRepository {
 
     final authUid = FirebaseAuth.instance.currentUser?.uid;
 
+    // Build allowed viewer lists for Firestore rule checks
+    final allowedViewerEmails = emergencyContacts
+        .where((c) => c.isEnabled && (c.email != null && c.email!.isNotEmpty))
+        .map((c) => c.email!)
+        .toSet()
+        .toList();
+
+    // Placeholder for future expansion if contacts are mapped to user IDs
+    final List<String> allowedViewerIds = <String>[];
+
     return {
       'id': s.id,
       // Align with Firestore rules: owner must match request.auth.uid
       'userId': authUid ?? s.userId,
+      // Restrict visibility and allow specific contacts to view via email
+      'visibility': 'restricted',
+      if (allowedViewerEmails.isNotEmpty)
+        'allowedViewerEmails': allowedViewerEmails,
+      if (allowedViewerIds.isNotEmpty) 'allowedViewerIds': allowedViewerIds,
       // Add user profile information for SAR dashboard
       if (userProfile != null ||
           fallbackName != null ||
@@ -606,5 +622,22 @@ class SosRepository {
       // If we can't fetch profile, return null and continue without it
       return null;
     }
+  }
+
+  // Offline error throttling to prevent log flood when network is down
+  static DateTime _lastOfflineLog = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _offlineLogCooldown = Duration(seconds: 30);
+
+  void _maybeLogOfflineError(String context, Object e) {
+    final isOffline = ConnectivityMonitorService().isOffline;
+    if (isOffline) {
+      final now = DateTime.now();
+      if (now.difference(_lastOfflineLog) >= _offlineLogCooldown) {
+        _lastOfflineLog = now;
+        debugPrint('SosRepository: Offline - suppressed repeated errors during "$context"');
+      }
+      return; // Suppress detailed error spam while offline
+    }
+    debugPrint('SosRepository: Failed to $context - $e');
   }
 }

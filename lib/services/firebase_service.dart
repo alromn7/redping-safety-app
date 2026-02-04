@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../core/logging/app_logger.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/google_cloud_config.dart';
 import '../core/test_overrides.dart';
 import '../models/sos_session.dart';
@@ -39,6 +41,7 @@ class FirebaseService {
   Function(Map<String, dynamic>)? _onSosAlertReceived;
   Function(Map<String, dynamic>)? _onSarUpdateReceived;
   Function(Map<String, dynamic>)? _onLocationUpdateReceived;
+  Function(Map<String, dynamic>)? _onHazardAlertReceived;
   Function(String)? _onAuthStateChanged;
   Function(String, dynamic)? _onError;
 
@@ -212,6 +215,10 @@ class FirebaseService {
           break;
         case 'location_update':
           _onLocationUpdateReceived?.call(data);
+          break;
+        case 'hazard_alert':
+        case 'hazard':
+          _onHazardAlertReceived?.call(data);
           break;
       }
     }
@@ -475,6 +482,10 @@ class FirebaseService {
     _onLocationUpdateReceived = callback;
   }
 
+  void setHazardAlertCallback(Function(Map<String, dynamic>) callback) {
+    _onHazardAlertReceived = callback;
+  }
+
   void setAuthStateCallback(Function(String) callback) {
     _onAuthStateChanged = callback;
   }
@@ -526,4 +537,33 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     'Background message received - ${message.messageId}',
     tag: 'FirebaseService',
   );
+
+  // Persist hazard alerts so they can appear in-app even when the push arrived
+  // while the app was backgrounded/killed.
+  try {
+    final type = message.data['type']?.toString();
+    if (type == 'hazard_alert' || type == 'hazard') {
+      final prefs = await SharedPreferences.getInstance();
+      final existing =
+          prefs.getStringList('pending_hazard_alert_pushes') ?? <String>[];
+
+      existing.add(jsonEncode(message.data));
+
+      // Prevent unbounded growth.
+      final capped =
+          existing.length > 50 ? existing.sublist(existing.length - 50) : existing;
+      await prefs.setStringList('pending_hazard_alert_pushes', capped);
+
+      AppLogger.d(
+        'Queued hazard push payload (count=${capped.length})',
+        tag: 'FirebaseService',
+      );
+    }
+  } catch (e) {
+    AppLogger.w(
+      'Failed to persist background message payload',
+      tag: 'FirebaseService',
+      error: e,
+    );
+  }
 }

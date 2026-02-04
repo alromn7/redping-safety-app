@@ -6,9 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sos_session.dart';
 import '../core/logging/app_logger.dart';
 import 'emergency_contacts_service.dart';
+import 'sms_service.dart';
 import 'notification_service.dart';
 import '../repositories/sos_repository.dart';
 import 'foreground_service_manager.dart';
+import 'connectivity_monitor_service.dart';
 
 /// Offline queue to guarantee SOS delivery when network is down.
 class OfflineSOSQueueService {
@@ -101,6 +103,21 @@ class OfflineSOSQueueService {
     );
   }
 
+  /// Offer an internet share prompt (WhatsApp/Email/etc.) for Wi‑Fi-only cases.
+  ///
+  /// This is the best-effort option when there is internet access but no
+  /// carrier mobile network for SMS.
+  Future<void> offerSharePrompt(SOSSession session) async {
+    await _notificationService.showNotification(
+      title: 'Share SOS via internet',
+      body: 'Tap to share your SOS message to contacts (WhatsApp/Email/etc.).',
+      importance: NotificationImportance.high,
+      persistent: true,
+      notificationId: 21003,
+      payload: 'offline_sos_share:${session.id}',
+    );
+  }
+
   /// Attempt to deliver queued SOS sessions.
   Future<void> processQueue() async {
     if (_queue.isEmpty) return;
@@ -110,14 +127,99 @@ class OfflineSOSQueueService {
     for (final q in copy) {
       try {
         final session = SOSSession.fromJson(jsonDecode(q.sessionJson));
-        // 1) Persist session to Firestore
-        await _repo.createOrUpdateFromSession(session);
-        // 2) Try sending contact alerts (best-effort; simulated transports)
-        await _contactsService.sendEmergencyAlerts(session);
-        // 3) Remove on success
-        _queue.removeWhere((x) => x.id == q.id);
-        await _save();
-        AppLogger.i('Delivered offline SOS (${q.id})', tag: 'OfflineSOSQueue');
+        // Determine connectivity
+        final results = await Connectivity().checkConnectivity();
+        bool hasInternet = false;
+        try {
+          final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
+          hasInternet = hasInterfaces &&
+              await ConnectivityMonitorService().isInternetReachable(
+                timeout: const Duration(seconds: 2),
+              );
+        } catch (_) {
+          hasInternet = false;
+        }
+        final hasMobile = results.any((r) => r == ConnectivityResult.mobile);
+
+        // Enabled contacts
+        final contacts = _contactsService.enabledContacts;
+
+        bool delivered = false;
+
+        // SMS-first: attempt carrier SMS even if internet is unavailable
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final enableSms = prefs.getBool('enable_sms_notifications') ?? false;
+          if (enableSms && contacts.isNotEmpty && hasMobile) {
+            await SMSService.instance.startSMSNotifications(session, contacts);
+            delivered = true;
+            AppLogger.i(
+              'Offline queue: SMS notifications started for ${contacts.length} contacts',
+              tag: 'OfflineSOSQueue',
+            );
+          }
+        } catch (e) {
+          AppLogger.w(
+            'Offline queue: SMS start failed (will try internet fallback)',
+            tag: 'OfflineSOSQueue',
+            error: e,
+          );
+        }
+
+        // Wi‑Fi/internet-only case: offer an explicit share prompt for contacts.
+        // (This does not auto-send anything; it opens a user-driven share sheet.)
+        if (!delivered && hasInternet && contacts.isNotEmpty && !hasMobile) {
+          try {
+            await offerSharePrompt(session);
+            AppLogger.i(
+              'Offline queue: Offered share prompt for Wi‑Fi/internet-only case',
+              tag: 'OfflineSOSQueue',
+            );
+          } catch (e) {
+            AppLogger.w(
+              'Offline queue: Share prompt failed',
+              tag: 'OfflineSOSQueue',
+              error: e,
+            );
+          }
+        }
+
+        // Persist session to Firestore when internet is available (best-effort)
+        if (hasInternet) {
+          try {
+            await _repo.createOrUpdateFromSession(session);
+          } catch (e) {
+            AppLogger.w(
+              'Offline queue: Firestore persistence failed',
+              tag: 'OfflineSOSQueue',
+              error: e,
+            );
+          }
+        }
+
+        // Best-effort simulated alerts for logging/analytics
+        try {
+          await _contactsService.sendEmergencyAlerts(session);
+        } catch (e) {
+          AppLogger.w(
+            'Offline queue: sendEmergencyAlerts failed',
+            tag: 'OfflineSOSQueue',
+            error: e,
+          );
+        }
+
+        // Remove item if any delivery path succeeded
+        if (delivered || hasInternet) {
+          _queue.removeWhere((x) => x.id == q.id);
+          await _save();
+          AppLogger.i('Delivered offline SOS (${q.id})', tag: 'OfflineSOSQueue');
+        } else {
+          // Keep in queue for future attempts
+          AppLogger.i(
+            'Offline queue: no delivery path available (will retry)',
+            tag: 'OfflineSOSQueue',
+          );
+        }
       } catch (e) {
         // Update metadata and continue
         final idx = _queue.indexWhere((x) => x.id == q.id);

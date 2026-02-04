@@ -351,9 +351,9 @@ class _HelpAssistantPageState extends State<HelpAssistantPage> {
             const SizedBox(width: 12),
             Expanded(
               child: _buildQuickActionCard(
-                'Community\nHelp Chat',
-                Icons.chat,
-                AppTheme.safeGreen,
+                'Community\n(Website)',
+                Icons.public,
+                AppTheme.neutralGray,
                 () => _openCommunityChat(),
               ),
             ),
@@ -570,7 +570,14 @@ class _HelpAssistantPageState extends State<HelpAssistantPage> {
   }
 
   void _openCommunityChat() {
-    context.go('/chat');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Community chat is available on the RedPing website (not in-app in this build).',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _showEmergencyContacts() {

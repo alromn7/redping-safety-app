@@ -93,12 +93,12 @@ class FeatureComparisonTable extends StatelessWidget {
                     family: '✓ Unlimited',
                   ),
                   _buildFeatureRow(
-                    'Community Chat',
-                    free: '✓ Full',
-                    essentialPlus: '✓ Full',
-                    pro: '✓ Full',
-                    ultra: '✓ Full',
-                    family: '✓ Full',
+                    'Community (website)',
+                    free: 'Web only',
+                    essentialPlus: 'Web only',
+                    pro: 'Web only',
+                    ultra: 'Web only',
+                    family: 'Web only',
                   ),
                   _buildFeatureRow(
                     'Quick Call',
@@ -193,18 +193,6 @@ class FeatureComparisonTable extends StatelessWidget {
                     ultra: '✓',
                     family: '✓',
                     highlight: SubscriptionTier.essentialPlus,
-                  ),
-
-                  // AI & Intelligence
-                  _buildCategoryRow('AI & INTELLIGENCE'),
-                  _buildFeatureRow(
-                    'AI Safety Assistant',
-                    free: '✗',
-                    essentialPlus: '✗',
-                    pro: '✓ 24 Cmds',
-                    ultra: '✓ 24 Cmds',
-                    family: '✓ Pro',
-                    highlight: SubscriptionTier.pro,
                   ),
 
                   // Devices & Integration
@@ -304,12 +292,12 @@ class FeatureComparisonTable extends StatelessWidget {
                     family: '✓',
                   ),
                   _buildFeatureRow(
-                    'Family Chat',
-                    free: '✗',
-                    essentialPlus: '✗',
-                    pro: '✗',
-                    ultra: '✗',
-                    family: '✓',
+                    'Family Chat (not in-app)',
+                    free: 'Not in-app',
+                    essentialPlus: 'Not in-app',
+                    pro: 'Not in-app',
+                    ultra: 'Not in-app',
+                    family: 'Not in-app',
                   ),
                   _buildFeatureRow(
                     'Account Mix',

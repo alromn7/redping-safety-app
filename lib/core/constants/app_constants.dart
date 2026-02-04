@@ -31,6 +31,10 @@ class AppConstants {
   static const double criticalAltitudeGainMeters = 15.0;
   static const int criticalAltitudeWindowSeconds = 30;
 
+  // Flight detection thresholds
+  static const double flightSpeedKmhThreshold = 250.0; // km/h
+  static const double flightAltitudeFallbackMeters = 2500.0; // meters
+
   // Crash Detection Thresholds (Production)
   static const double crashAccelerationThreshold = 25.0; // m/s²
   static const double fallDetectionThreshold = 15.0; // m/s²

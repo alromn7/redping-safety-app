@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:go_router/go_router.dart';
+import '../../config/env.dart';
 import '../../features/sos/presentation/pages/sos_page.dart';
 import '../../features/sos/presentation/pages/emergency_card_page.dart';
-import '../../features/location/presentation/pages/map_page.dart';
 import '../../features/safety/presentation/pages/safety_dashboard_page.dart';
-import '../../features/communication/presentation/pages/chat_page.dart';
+// Safety Fund routes removed (feature canceled)
+// Community chat removed - now available on RedPing website only
 import '../../features/communication/presentation/pages/satellite_page.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
 import '../../features/profile/presentation/pages/emergency_contacts_page.dart';
@@ -21,31 +22,31 @@ import '../../features/sar/presentation/pages/sar_history_page.dart';
 import '../../features/sar/presentation/pages/organization_registration_page.dart';
 import '../../features/sar/presentation/pages/organization_dashboard_page.dart';
 import '../../features/help/presentation/pages/help_assistant_page.dart';
-import '../../features/ai/presentation/pages/ai_assistant_page.dart';
 import '../../features/activities/presentation/pages/activities_page.dart';
 import '../../features/activities/presentation/pages/create_activity_page.dart';
 import '../../features/activities/presentation/pages/start_activity_page.dart';
 import '../../models/user_activity.dart';
 import '../../features/privacy/presentation/pages/privacy_test_page.dart';
 import '../../features/hazard/presentation/pages/hazard_alerts_page.dart';
-import '../../features/communication/presentation/widgets/cross_messaging_test_widget.dart';
+// cross_messaging_test_widget removed - community chat removed
 // import '../../features/sar/presentation/pages/sos_ping_dashboard_page.dart'; // Removed - using SARPage instead
 import '../../features/auth/presentation/pages/login_page.dart';
 import '../../features/auth/presentation/pages/signup_page.dart';
-import '../../features/subscription/presentation/pages/subscription_plans_page.dart';
-import '../../features/subscription/presentation/pages/family_dashboard_page.dart';
-import '../../features/subscription/presentation/pages/payment_page.dart';
-import '../../features/subscription/presentation/pages/subscription_management_page.dart';
-import '../../features/subscription/presentation/pages/payment_methods_page.dart';
-import '../../features/subscription/presentation/pages/billing_history_page.dart';
+import '../../features/auth/presentation/pages/email_link_signin_page.dart';
 import '../../features/gadgets/presentation/pages/gadgets_management_page.dart';
 import '../../shared/presentation/pages/main_navigation_page.dart';
 import '../../shared/presentation/pages/onboarding_page.dart';
 import '../../shared/presentation/pages/splash_page.dart';
-import '../../features/onboarding/ai_onboarding_page.dart';
 import '../../services/auth_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../screens/sar_chat_screen.dart';
+// sar_chat_screen import removed - community chat removed
+// RedPing Doctor
+import '../../features/doctor/pages/medication_list_page.dart';
+import '../../features/doctor/pages/medication_editor_page.dart';
+import '../../features/doctor/pages/appointment_list_page.dart';
+import '../../features/doctor/pages/medical_profile_editor_page.dart';
+import '../app/app_launch_config.dart';
+import '../app_variant.dart';
 
 /// Simple notifier to trigger router refreshes from a stream
 class _GoRouterRefreshStream extends ChangeNotifier {
@@ -95,15 +96,12 @@ class OnboardingPreferenceHelper {
 
 /// Application routing configuration using GoRouter
 class AppRouter {
-  static const String sarChat = '/sar-chat';
   static const String splash = '/';
   static const String onboarding = '/onboarding';
-  static const String aiOnboarding = '/ai-onboarding';
   static const String main = '/main';
   static const String sos = '/sos';
-  static const String map = '/map';
   static const String safety = '/safety';
-  static const String community = '/community';
+  // community route removed - community chat now available on website only
   static const String profile = '/profile';
   static const String settings = '/settings';
   static const String satellite = '/satellite';
@@ -114,7 +112,6 @@ class AppRouter {
   static const String organizationDashboard = '/organization-dashboard';
   static const String sosPingDashboard = '/sos-ping-dashboard';
   static const String helpAssistant = '/help-assistant';
-  static const String aiAssistant = '/ai-assistant';
   static const String activities = '/activities';
   static const String createActivity = '/activities/create';
   static const String startActivity = '/activities/start';
@@ -125,8 +122,7 @@ class AppRouter {
   static const String deviceSettings = '/device-settings';
   static const String login = '/login';
   static const String signup = '/signup';
-  static const String subscriptionPlans = '/subscription/plans';
-  static const String familyDashboard = '/subscription/family-dashboard';
+  static const String emailLinkSignIn = '/auth/email-link';
   static const String gadgets = '/gadgets';
 
   static final _auth = AuthService.instance;
@@ -139,20 +135,28 @@ class AppRouter {
       // Splash must be allowed to load and perform async initializations
       final isSplash = state.matchedLocation == splash;
 
+      // Variant gating: SOS build should not expose SAR routes.
+      if (AppLaunchConfig.variant == AppVariant.emergency &&
+          state.matchedLocation.startsWith(sar)) {
+        return AppLaunchConfig.homeRoute;
+      }
+
       // Auth status
       final isAuthed = _auth.isAuthenticated;
 
       // If not authenticated, send to login except for public routes
       final isAuthRoute =
           state.matchedLocation == login || state.matchedLocation == signup;
+      final isEmergencyCardRoute = state.matchedLocation.startsWith('/sos/');
+      final isEmailLinkRoute = state.matchedLocation.startsWith(emailLinkSignIn);
 
-      if (!isAuthed && !isSplash && !isAuthRoute) {
+      if (!isAuthed && !isSplash && !isAuthRoute && !isEmergencyCardRoute && !isEmailLinkRoute) {
         return login;
       }
 
       // If authenticated, prevent returning to login/signup
-      if (isAuthed && isAuthRoute) {
-        return main;
+      if (isAuthed && (isAuthRoute || isEmailLinkRoute)) {
+        return AppLaunchConfig.homeRoute;
       }
 
       return null;
@@ -169,19 +173,7 @@ class AppRouter {
         },
       ),
 
-      // SAR Chat Page
-      GoRoute(
-        path: sarChat,
-        name: 'sar-chat',
-        builder: (context, state) {
-          // For demo, use hardcoded IDs. Replace with real user/SAR IDs in production.
-          return SARChatScreen(
-            sarMemberId: 'sar_demo_001',
-            userId: 'user_demo_001',
-            userName: 'Demo User',
-          );
-        },
-      ),
+      // SAR Chat route removed - community chat now available on website only
       // Splash Screen
       GoRoute(
         path: splash,
@@ -194,13 +186,6 @@ class AppRouter {
         path: onboarding,
         name: 'onboarding',
         builder: (context, state) => const OnboardingPage(),
-      ),
-
-      // AI Onboarding - Interactive AI-powered tutorial
-      GoRoute(
-        path: aiOnboarding,
-        name: 'aiOnboarding',
-        builder: (context, state) => const AIOnboardingPage(),
       ),
 
       // Main Navigation Shell
@@ -216,13 +201,6 @@ class AppRouter {
             builder: (context, state) => const SOSPage(),
           ),
 
-          // Map Page
-          GoRoute(
-            path: map,
-            name: 'map',
-            builder: (context, state) => const MapPage(),
-          ),
-
           // Safety Dashboard
           GoRoute(
             path: safety,
@@ -230,12 +208,9 @@ class AppRouter {
             builder: (context, state) => const SafetyDashboardPage(),
           ),
 
-          // Community Page
-          GoRoute(
-            path: community,
-            name: 'community',
-            builder: (context, state) => const ChatPage(),
-          ),
+          // Safety Fund routes removed
+
+          // Community route removed - community chat now available on website only
 
           // Profile Page
           GoRoute(
@@ -292,12 +267,7 @@ class AppRouter {
                 builder: (context, state) => const PrivacyTestPage(),
               ),
 
-              // Cross Messaging Test Sub-page (temporary)
-              GoRoute(
-                path: 'cross-messaging-test',
-                name: 'cross-messaging-test',
-                builder: (context, state) => const CrossMessagingTestWidget(),
-              ),
+              // Cross Messaging Test removed - community chat removed
 
               // Gadgets Management Sub-page
               GoRoute(
@@ -313,6 +283,42 @@ class AppRouter {
             path: sar,
             name: 'sar',
             builder: (context, state) => const SARPage(),
+          ),
+
+          // RedPing Doctor - Health utilities (medications & appointments)
+          GoRoute(
+            path: '/doctor/medications',
+            name: 'doctor-medications',
+            builder: (context, state) {
+              final userId = AuthService.instance.currentUser.id;
+              return MedicationListPage(userId: userId);
+            },
+          ),
+          GoRoute(
+            path: '/doctor/medications/edit',
+            name: 'doctor-medications-edit',
+            builder: (context, state) {
+              final userId = AuthService.instance.currentUser.id;
+              final extra = state.extra;
+              final med = (extra is Map && extra['medication'] != null)
+                  ? extra['medication'] as dynamic
+                  : null;
+              // We avoid strict typing here to prevent import cycles; page validates type.
+              return MedicationEditorPage(userId: userId, medication: med);
+            },
+          ),
+          GoRoute(
+            path: '/doctor/appointments',
+            name: 'doctor-appointments',
+            builder: (context, state) {
+              final userId = AuthService.instance.currentUser.id;
+              return AppointmentListPage(userId: userId);
+            },
+          ),
+          GoRoute(
+            path: '/doctor/profile',
+            name: 'doctor-profile',
+            builder: (context, state) => const MedicalProfileEditorPage(),
           ),
 
           // SAR Registration
@@ -353,11 +359,6 @@ class AppRouter {
             path: helpAssistant,
             name: 'help-assistant',
             builder: (context, state) => const HelpAssistantPage(),
-          ),
-          GoRoute(
-            path: aiAssistant,
-            name: 'ai-assistant',
-            builder: (context, state) => const AIAssistantPage(),
           ),
 
           // Activities
@@ -415,51 +416,15 @@ class AppRouter {
         builder: (context, state) => const SignupPage(),
       ),
 
-      // Subscription Pages
+      // Email Link Sign-In (passwordless)
       GoRoute(
-        path: subscriptionPlans,
-        name: 'subscription-plans',
-        builder: (context, state) => const SubscriptionPlansPage(),
-      ),
-
-      GoRoute(
-        path: familyDashboard,
-        name: 'family-dashboard',
-        builder: (context, state) => const FamilyDashboardPage(),
-      ),
-
-      // Payment Page
-      GoRoute(
-        path: '/subscription/payment',
-        name: 'payment',
+        path: emailLinkSignIn,
+        name: 'email-link-signin',
         builder: (context, state) {
-          final extra = state.extra as Map<String, dynamic>?;
-          return PaymentPage(
-            tier: extra?['tier'],
-            isYearlyBilling: extra?['isYearlyBilling'] ?? false,
-          );
+          final extra = state.extra as Map<dynamic, dynamic>?;
+          final link = extra != null ? (extra['link'] as String?) : null;
+          return EmailLinkSignInPage(emailLink: link);
         },
-      ),
-
-      // Subscription Management Page
-      GoRoute(
-        path: '/subscription/manage',
-        name: 'subscription-management',
-        builder: (context, state) => const SubscriptionManagementPage(),
-      ),
-
-      // Payment Methods Page
-      GoRoute(
-        path: '/subscription/payment-methods',
-        name: 'payment-methods',
-        builder: (context, state) => const PaymentMethodsPage(),
-      ),
-
-      // Billing History Page
-      GoRoute(
-        path: '/subscription/billing-history',
-        name: 'billing-history',
-        builder: (context, state) => const BillingHistoryPage(),
       ),
 
       // Full-screen SOS Session (when active)
@@ -660,8 +625,8 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
         .getRecommendedSensorInterval();
     final locInterval = _serviceManager.batteryOptimizationService
         .getRecommendedLocationInterval();
-    final aiInterval = _serviceManager.batteryOptimizationService
-        .getRecommendedAIProcessingInterval();
+    final backgroundInterval = _serviceManager.batteryOptimizationService
+      .getRecommendedBackgroundProcessingInterval();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Device Settings')),
@@ -690,11 +655,9 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
                       const Spacer(),
                       Chip(
                         label: Text(isCalibrated ? 'Calibrated' : 'Pending'),
-                        backgroundColor:
-                            (isCalibrated
-                                    ? AppTheme.safeGreen
-                                    : AppTheme.warningOrange)
-                                .withValues(alpha: 0.2),
+                        backgroundColor: (isCalibrated
+                            ? AppTheme.safeGreen.withOpacity(0.15)
+                            : AppTheme.warningOrange.withOpacity(0.15)),
                         labelStyle: TextStyle(
                           color: isCalibrated
                               ? AppTheme.safeGreen
@@ -796,7 +759,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
                     '${sensorInterval.inMilliseconds} ms',
                   ),
                   _kv('Location interval', _fmt(locInterval)),
-                  _kv('AI processing', _fmt(aiInterval)),
+                  _kv('Background processing', _fmt(backgroundInterval)),
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -827,7 +790,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
 
   Widget _kv(String k, String v) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
           Expanded(

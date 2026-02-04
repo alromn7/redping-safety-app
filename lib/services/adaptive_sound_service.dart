@@ -1,12 +1,13 @@
-import 'package:audioplayers/audioplayers.dart';
+// audioplayers removed in Phase 1 optimization - using vibration only
 import 'package:flutter/foundation.dart';
 import 'package:vibration/vibration.dart';
 import '../models/sos_session.dart';
 
 /// Adaptive Sound Service for RedPing
-/// Provides escalating sound intensity based on emergency severity and duration
+/// Provides escalating vibration intensity based on emergency severity and duration
+/// NOTE: Audio playback removed in Phase 1 APK size optimization
 ///
-/// Sound Intensity Levels:
+/// Vibration Intensity Levels:
 /// Level 1 (Initial): Gentle alert - "something needs attention"
 /// Level 2 (Follow-up): Moderate urgency - "this is important"
 /// Level 3 (Escalation): High urgency - "respond now"
@@ -17,7 +18,7 @@ class AdaptiveSoundService {
   factory AdaptiveSoundService() => instance;
   AdaptiveSoundService._internal();
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  // AudioPlayer removed - using vibration only
   bool _isPlaying = false;
   int _currentIntensityLevel = 1;
 
@@ -69,11 +70,11 @@ class AdaptiveSoundService {
     ),
   };
 
-  /// Initialize audio player
+  /// Initialize service (audio player removed, only vibration)
   Future<void> initialize() async {
     try {
-      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
-      debugPrint('✅ AdaptiveSoundService initialized');
+      // Audio player initialization removed in Phase 1 optimization
+      debugPrint('✅ AdaptiveSoundService initialized (vibration only)');
     } catch (e) {
       debugPrint('❌ Failed to initialize AdaptiveSoundService: $e');
     }
@@ -154,41 +155,17 @@ class AdaptiveSoundService {
     return 5; // Auto-escalation threshold
   }
 
-  /// Play sound file with configuration
+  /// Play sound file with configuration (audio removed, using vibration only)
   Future<void> _playSound(SoundConfig config) async {
     try {
-      // Stop any currently playing sound
-      await _audioPlayer.stop();
-
-      // Set volume
-      await _audioPlayer.setVolume(config.volume);
-
-      // Set loop mode
-      if (config.loops == -1) {
-        await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-      } else {
-        await _audioPlayer.setReleaseMode(ReleaseMode.stop);
-      }
-
-      // Play from assets
-      await _audioPlayer.play(AssetSource('sounds/${config.filename}'));
-
+      // Audio playback removed in Phase 1 APK optimization
+      // Using vibration patterns and system notifications instead
       _isPlaying = true;
-
-      // Handle finite loops
-      if (config.loops > 1) {
-        for (int i = 1; i < config.loops; i++) {
-          await Future.delayed(
-            const Duration(milliseconds: 100),
-          ); // Brief pause between loops
-          if (_isPlaying) {
-            await _audioPlayer.play(AssetSource('sounds/${config.filename}'));
-          }
-        }
-      }
+      debugPrint(
+        '🔔 Sound playback skipped (using vibration): ${config.description}',
+      );
     } catch (e) {
-      debugPrint('❌ Error playing sound file: $e');
-      // Fallback to system notification sound
+      debugPrint('❌ Error in sound method: $e');
     }
   }
 
@@ -205,16 +182,16 @@ class AdaptiveSoundService {
     }
   }
 
-  /// Stop currently playing sound
+  /// Stop currently playing sound (audio removed, vibration only)
   Future<void> stopSound() async {
     try {
       if (_isPlaying) {
-        await _audioPlayer.stop();
+        // Audio player removed - vibration stops automatically
         _isPlaying = false;
-        debugPrint('🔇 Stopped RedPing sound');
+        debugPrint('🔇 Stopped vibration notification');
       }
     } catch (e) {
-      debugPrint('❌ Error stopping sound: $e');
+      debugPrint('❌ Error stopping: $e');
     }
   }
 
@@ -238,9 +215,10 @@ class AdaptiveSoundService {
   /// Check if sound is currently playing
   bool get isPlaying => _isPlaying;
 
-  /// Dispose resources
+  /// Dispose resources (audio player removed)
   Future<void> dispose() async {
-    await _audioPlayer.dispose();
+    // Audio player disposal removed - using vibration only
+    _isPlaying = false;
   }
 }
 

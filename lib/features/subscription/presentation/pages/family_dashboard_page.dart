@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/app/app_launch_config.dart';
 import '../../../../models/auth_user.dart';
 import '../../../../models/subscription_tier.dart';
 import '../../../../services/subscription_service.dart';
+import '../../../../services/check_in_service.dart';
+import '../../../../services/firebase_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../widgets/family_member_card.dart';
 import '../widgets/family_stats_widget.dart';
@@ -233,7 +236,7 @@ class _FamilyDashboardPageState extends State<FamilyDashboardPage>
               if (Navigator.canPop(context)) {
                 Navigator.pop(context);
               } else {
-                context.go('/main');
+                    context.go(AppLaunchConfig.homeRoute);
               }
             },
           ),
@@ -269,7 +272,7 @@ class _FamilyDashboardPageState extends State<FamilyDashboardPage>
             if (Navigator.canPop(context)) {
               Navigator.pop(context);
             } else {
-              context.go('/main');
+                  context.go(AppLaunchConfig.homeRoute);
             }
           },
         ),
@@ -301,10 +304,50 @@ class _FamilyDashboardPageState extends State<FamilyDashboardPage>
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addFamilyMember,
+        onPressed: () async {
+          // Show action sheet for multiple actions (add member & check-in ping)
+          final action = await showModalBottomSheet<String>(
+            context: context,
+            showDragHandle: true,
+            backgroundColor: AppTheme.darkSurface,
+            builder: (ctx) {
+              return SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      leading: const Icon(
+                        Icons.person_add,
+                        color: AppTheme.safeGreen,
+                      ),
+                      title: const Text('Add Family Member'),
+                      onTap: () => Navigator.pop(ctx, 'add'),
+                    ),
+                    ListTile(
+                      leading: const Icon(
+                        Icons.location_searching,
+                        color: AppTheme.infoBlue,
+                      ),
+                      title: const Text('Send Check-In Ping'),
+                      subtitle: const Text(
+                        'Request a one-time location snapshot',
+                      ),
+                      onTap: () => Navigator.pop(ctx, 'checkin'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+          if (action == 'add') {
+            await _addFamilyMember();
+          } else if (action == 'checkin') {
+            await _startCheckInPingFlow();
+          }
+        },
         backgroundColor: AppTheme.warningOrange,
-        icon: const Icon(Icons.person_add),
-        label: const Text('Add Member'),
+        icon: const Icon(Icons.add),
+        label: const Text('Actions'),
       ),
     );
   }
@@ -330,10 +373,10 @@ class _FamilyDashboardPageState extends State<FamilyDashboardPage>
             children: [
               Expanded(
                 child: _buildQuickActionCard(
-                  'Family Chat',
-                  Icons.chat,
+                  'Family Portal Messaging',
+                  Icons.public,
                   AppTheme.infoBlue,
-                  () => context.push('/chat/family'),
+                  () => _showWebOnlyMessage('Family portal messaging'),
                 ),
               ),
               const SizedBox(width: 12),
@@ -635,6 +678,15 @@ class _FamilyDashboardPageState extends State<FamilyDashboardPage>
     );
   }
 
+  void _showWebOnlyMessage(String featureName) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$featureName is not available in-app in this build.'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   Future<void> _removeFamilyMember(String memberId) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -707,6 +759,117 @@ class _FamilyDashboardPageState extends State<FamilyDashboardPage>
             content: Text('Error updating settings: $e'),
             backgroundColor: AppTheme.criticalRed,
             behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _startCheckInPingFlow() async {
+    if (_familySubscription == null || _familySubscription!.members.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No family members available for check-in'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final targetMemberId = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Send Check-In Ping'),
+          content: SizedBox(
+            width: 320,
+            child: ListView(
+              shrinkWrap: true,
+              children: _familySubscription!.members.map((m) {
+                return ListTile(
+                  leading: const Icon(Icons.person_pin_circle),
+                  title: Text(m.name),
+                  subtitle: Text(m.relationship ?? 'Member'),
+                  onTap: () => Navigator.pop(ctx, m.id),
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+    if (targetMemberId == null) return;
+
+    final reasonController = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Optional Reason'),
+        content: TextField(
+          controller: reasonController,
+          decoration: const InputDecoration(
+            labelText: 'Reason (optional)',
+            hintText: 'e.g. Pickup confirmation',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Skip'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, reasonController.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.warningOrange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+
+    final currentUser = FirebaseService().currentUser;
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Not authenticated'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppTheme.criticalRed,
+        ),
+      );
+      return;
+    }
+
+    try {
+      await CheckInService.instance.createRequest(
+        familyId: _familySubscription!.id,
+        requesterUserId: currentUser.uid,
+        targetUserId: targetMemberId,
+        reason: (reason != null && reason.isNotEmpty) ? reason : null,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Check-In Ping sent (expires in 7 days)'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppTheme.safeGreen,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error sending check-in ping: $e'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppTheme.criticalRed,
           ),
         );
       }

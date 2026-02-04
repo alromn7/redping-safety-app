@@ -65,7 +65,54 @@ class GoogleCloudApiService {
       );
     }
 
+    // Run initial health check to populate connection status
+    _runInitialHealthCheck();
+
     debugPrint('GoogleCloudApiService: Initialized successfully');
+  }
+
+  /// Run initial health check on startup
+  Future<void> _runInitialHealthCheck() async {
+    // Run in background to avoid blocking initialization
+    Future.microtask(() async {
+      try {
+        debugPrint('GoogleCloudApiService: Running initial health check...');
+
+        // Test basic connectivity
+        final healthResponse = await _makeRequest('GET', '/health');
+        if (healthResponse != null) {
+          _isConnected = true;
+          _lastSuccessfulRequest = DateTime.now();
+          debugPrint(
+            'GoogleCloudApiService: Health check passed - API connected',
+          );
+        } else {
+          _isConnected = false;
+          _lastSuccessfulRequest =
+              DateTime.now(); // Mark attempt time even on failure
+          debugPrint(
+            'GoogleCloudApiService: Health check failed - API disconnected',
+          );
+        }
+
+        // Test protected endpoint (security)
+        final protectedOk = await protectedPing();
+        if (protectedOk) {
+          debugPrint('GoogleCloudApiService: Security check passed');
+        } else {
+          debugPrint(
+            'GoogleCloudApiService: Security check failed or not available',
+          );
+        }
+      } catch (e) {
+        _isConnected = false;
+        _lastSuccessfulRequest =
+            DateTime.now(); // Mark attempt time even on error
+        _lastProtectedPingOk = false; // Mark security check as failed
+        _lastProtectedPingAt = DateTime.now();
+        debugPrint('GoogleCloudApiService: Initial health check error - $e');
+      }
+    });
   }
 
   /// Start heartbeat to maintain connection with backend
@@ -111,9 +158,8 @@ class GoogleCloudApiService {
     if (!_isInitialized) {
       throw Exception('Service not initialized');
     }
-
+    final url = GoogleCloudConfig.getApiUrl(endpoint);
     try {
-      final url = GoogleCloudConfig.getApiUrl(endpoint);
       Map<String, String> headers = GoogleCloudConfig.getApiHeaders();
       final String encodedBody = body != null ? jsonEncode(body) : '';
 
@@ -247,8 +293,23 @@ class GoogleCloudApiService {
           'API request failed: ${response.statusCode} - ${response.body}',
         );
       }
-    } catch (e) {
+    } catch (e, st) {
       _isConnected = false;
+      // Extended diagnostics for TLS / integrity / signing failures
+      final msg = e.toString();
+      if (msg.contains('CERTIFICATE_VERIFY_FAILED')) {
+        debugPrint('[API] TLS hostname mismatch or cert issue for $url');
+      } else if (msg.contains('INTEGRITY_TOKEN_MISSING')) {
+        debugPrint(
+          '[API] Play Integrity token missing (method=$method endpoint=$endpoint)',
+        );
+      } else if (msg.contains('TlsPinningException')) {
+        debugPrint(
+          '[API] TLS pinning rejection for host ${Uri.parse(url).host}',
+        );
+      }
+      debugPrint('[API] $method $url failed: $e');
+      debugPrint('[API] Stack: $st');
       _onApiError?.call('API_REQUEST_FAILED', e);
       rethrow;
     }
@@ -315,8 +376,23 @@ class GoogleCloudApiService {
         _lastProtectedPingAt = DateTime.now();
       }
       return ok;
-    } catch (e) {
+    } catch (e, st) {
+      final msg = e.toString();
+      if (msg.contains('INTEGRITY_TOKEN_MISSING')) {
+        debugPrint(
+          '[ProtectedPing] Integrity token missing – check Play Services configuration & flags',
+        );
+      } else if (msg.contains('CERTIFICATE_VERIFY_FAILED')) {
+        debugPrint(
+          '[ProtectedPing] TLS hostname mismatch – validate GoogleCloudConfig.baseUrl and certificate CN/SAN',
+        );
+      } else if (msg.contains('TlsPinningException')) {
+        debugPrint(
+          '[ProtectedPing] TLS pin mismatch – verify assets/pins/pins.json fingerprints',
+        );
+      }
       debugPrint('GoogleCloudApiService: Protected ping failed - $e');
+      debugPrint('[ProtectedPing] Stack: $st');
       _lastProtectedPingOk = false;
       _lastProtectedPingAt = DateTime.now();
       return false;

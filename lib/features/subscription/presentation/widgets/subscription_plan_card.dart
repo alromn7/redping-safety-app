@@ -410,28 +410,6 @@ class SubscriptionPlanCard extends StatelessWidget {
             ? 'Organization management'
             : 'No organization management';
         break;
-      case 'aiAssistant':
-        if (value is String) {
-          switch (value) {
-            case 'basic':
-              displayText = 'Basic AI Assistant';
-              break;
-            case 'full':
-              displayText = 'Full AI Assistant';
-              break;
-            case 'enterprise':
-              displayText = 'Enterprise AI Assistant';
-              break;
-            case 'family':
-              displayText = 'Family AI Assistant';
-              break;
-            default:
-              displayText = 'AI Assistant ($value)';
-          }
-        } else {
-          displayText = value ? 'Full AI Assistant' : 'No AI Assistant';
-        }
-        break;
       case 'redpingHelp':
         if (value is int) {
           displayText = value == -1

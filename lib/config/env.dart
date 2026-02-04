@@ -40,26 +40,19 @@ class Env {
     EnvKeys.clientId,
     defaultValue: '',
   );
-  static const String _openaiBaseUrl = String.fromEnvironment(
-    EnvKeys.openaiBaseUrl,
+
+  // Magic Link / Passwordless auth
+  static const String _magicLinkContinueUrl = String.fromEnvironment(
+    EnvKeys.magicLinkContinueUrl,
     defaultValue: '',
   );
-  static const String _openaiModel = String.fromEnvironment(
-    EnvKeys.openaiModel,
-    defaultValue: '',
+  static const String _androidPackageName = String.fromEnvironment(
+    EnvKeys.androidPackageName,
+    defaultValue: 'com.redping.redping',
   );
-  static const String _openaiApiKey = String.fromEnvironment(
-    EnvKeys.openaiApiKey,
-    defaultValue: '',
-  );
-  // Gemini
-  static const String _geminiApiKey = String.fromEnvironment(
-    EnvKeys.geminiApiKey,
-    defaultValue: '',
-  );
-  static const String _geminiModel = String.fromEnvironment(
-    EnvKeys.geminiModel,
-    defaultValue: '',
+  static const String _iosBundleId = String.fromEnvironment(
+    EnvKeys.iosBundleId,
+    defaultValue: 'com.redping.redping',
   );
 
   /// API base URL (e.g. https://api.example.com/v1)
@@ -72,13 +65,13 @@ class Env {
   static String get apiKey => _apiKey;
   static String get clientId => _clientId;
 
-  // AI/LLM
-  static String get openaiBaseUrl => _openaiBaseUrl;
-  static String get openaiModel => _openaiModel;
-  static String get openaiApiKey => _openaiApiKey;
-  // Gemini
-  static String get geminiApiKey => _geminiApiKey;
-  static String get geminiModel => _geminiModel;
+  // Magic Link / Passwordless auth
+  static String get magicLinkContinueUrl =>
+      _magicLinkContinueUrl.isNotEmpty
+          ? _magicLinkContinueUrl
+          : 'https://redping.app/auth';
+  static String get androidPackageName => _androidPackageName;
+  static String get iosBundleId => _iosBundleId;
 
   /// Parsed feature flags from JSON string, empty on parse failure or missing.
   static Map<String, dynamic> get featureFlags {

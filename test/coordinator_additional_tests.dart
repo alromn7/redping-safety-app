@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:redping_14v/models/verification_result.dart';
+import 'package:redping_14v/models/detection_context.dart';
 import 'package:redping_14v/services/incident_escalation_coordinator.dart';
 import 'package:redping_14v/models/sos_session.dart';
 
@@ -38,13 +38,10 @@ void main() {
         );
         coordinator.detectionWindowStarted(ctx);
 
-        final result = VerificationResult(
-          outcome: VerificationOutcome.uncertainIncident,
-          confidence: 0.2,
-          reason: 'Low confidence',
+        coordinator.scheduleFallback(
           context: ctx,
+          reasonCode: 'Fallback_Uncertain',
         );
-        coordinator.handleVerificationResult(result);
 
         await Future.delayed(const Duration(milliseconds: 140));
 
@@ -56,6 +53,16 @@ void main() {
     );
 
     test('fallback cancelled on falseAlarm before expiry', () async {
+      final calls = <Map<String, dynamic>>[];
+      coordinator.startSOSOverride =
+          ({
+            required SOSType type,
+            required bool bringToSOSPage,
+            String? escalationReasonCode,
+          }) async {
+            calls.add({'type': type, 'reason': escalationReasonCode});
+          };
+
       final ctx = DetectionContext(
         type: DetectionType.crash,
         reason: DetectionReason.sharpDeceleration,
@@ -64,27 +71,19 @@ void main() {
       );
       coordinator.detectionWindowStarted(ctx);
 
-      final uncertain = VerificationResult(
-        outcome: VerificationOutcome.uncertainIncident,
-        confidence: 0.4,
-        reason: 'Awaiting clarity',
+      coordinator.scheduleFallback(
         context: ctx,
+        reasonCode: 'Fallback_Uncertain',
       );
-      coordinator.handleVerificationResult(uncertain);
 
-      // Cancel with false alarm quickly
-      final cancel = VerificationResult(
-        outcome: VerificationOutcome.falseAlarmDetected,
-        confidence: 0.9,
-        reason: 'User confirmed safe',
-        context: ctx,
-      );
-      coordinator.handleVerificationResult(cancel);
+      // Cancel quickly and mark as false alarm
+      coordinator.markFalseAlarm();
 
       // Wait beyond original fallback window to ensure no SOS
       await Future.delayed(const Duration(milliseconds: 150));
 
       expect(coordinator.state, CoordinatorState.falseAlarm);
+      expect(calls, isEmpty);
     });
 
     test('notifyCountdownStarted synchronizes state', () async {

@@ -4,6 +4,7 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../models/sar_session.dart';
 import '../../../../services/app_service_manager.dart';
 import '../../../../core/routing/app_router.dart';
+import '../../../../core/app/app_launch_config.dart';
 
 /// Page displaying SAR mission history and analytics
 class SARHistoryPage extends StatefulWidget {
@@ -46,7 +47,7 @@ class _SARHistoryPageState extends State<SARHistoryPage> {
         if (!didPop) {
           // When this page was reached via context.go(), there's nothing to pop.
           // Route safely back to the main shell route instead of underflowing the stack.
-          context.go(AppRouter.main);
+          context.go(AppLaunchConfig.homeRoute);
         }
       },
       child: Scaffold(
@@ -58,7 +59,7 @@ class _SARHistoryPageState extends State<SARHistoryPage> {
               if (Navigator.canPop(context)) {
                 Navigator.pop(context);
               } else {
-                context.go(AppRouter.main);
+                context.go(AppLaunchConfig.homeRoute);
               }
             },
           ),

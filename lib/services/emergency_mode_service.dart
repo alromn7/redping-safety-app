@@ -91,8 +91,8 @@ class EmergencyModeService {
     _originalSettings = {
       'sensor_interval': _batteryService.getRecommendedSensorInterval(),
       'location_interval': _batteryService.getRecommendedLocationInterval(),
-      'ai_processing_interval': _batteryService
-          .getRecommendedAIProcessingInterval(),
+      'processing_interval': _batteryService
+        .getRecommendedBackgroundProcessingInterval(),
       'background_processing': _batteryService
           .shouldReduceBackgroundProcessing(),
       'network_batching': _batteryService.shouldBatchNetworkRequests(),
@@ -211,13 +211,13 @@ class EmergencyModeService {
     return const Duration(seconds: 10); // Every 10 seconds
   }
 
-  /// Get emergency-optimized AI processing interval
-  Duration getEmergencyAIProcessingInterval() {
+  /// Get emergency-optimized background processing interval
+  Duration getEmergencyBackgroundProcessingInterval() {
     if (!_isEmergencyModeActive) {
-      return _batteryService.getRecommendedAIProcessingInterval();
+      return _batteryService.getRecommendedBackgroundProcessingInterval();
     }
 
-    // Emergency mode: Minimal AI processing
+    // Emergency mode: Minimal background processing
     return const Duration(minutes: 2); // Every 2 minutes
   }
 
@@ -231,7 +231,6 @@ class EmergencyModeService {
       'satellite_service',
       'activity_service',
       'help_assistant_service',
-      'ai_assistant_service',
       'privacy_security_service',
       'legal_documents_service',
       'volunteer_rescue_service',

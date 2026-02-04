@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../models/family_member_location.dart';
-import '../../../../models/auth_user.dart';
 import '../../../../services/family_location_service.dart';
 import '../../../../services/geofence_service.dart';
-import '../../../../services/subscription_service.dart';
 import '../widgets/family_member_location_card.dart';
 import '../widgets/geofence_zone_card.dart';
 
@@ -20,12 +18,10 @@ class _FamilyModeDashboardState extends State<FamilyModeDashboard>
     with SingleTickerProviderStateMixin {
   late final FamilyLocationService _locationService;
   late final GeofenceService _geofenceService;
-  late final SubscriptionService _subscriptionService;
   late final TabController _tabController;
 
   List<FamilyMemberLocation> _memberLocations = [];
   List<GeofenceZone> _geofences = [];
-  FamilySubscription? _family;
   bool _isLoading = true;
 
   @override
@@ -33,7 +29,6 @@ class _FamilyModeDashboardState extends State<FamilyModeDashboard>
     super.initState();
     _locationService = FamilyLocationService.instance;
     _geofenceService = GeofenceService.instance;
-    _subscriptionService = SubscriptionService.instance;
     _tabController = TabController(length: 3, vsync: this);
     _initialize();
   }
@@ -48,12 +43,10 @@ class _FamilyModeDashboardState extends State<FamilyModeDashboard>
     try {
       await _locationService.initialize();
       await _geofenceService.initialize();
-      await _subscriptionService.initialize();
 
       setState(() {
         _memberLocations = _locationService.allLocations;
         _geofences = _geofenceService.allZones;
-        _family = _subscriptionService.currentFamily;
         _isLoading = false;
       });
 
@@ -112,55 +105,9 @@ class _FamilyModeDashboardState extends State<FamilyModeDashboard>
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    // Check if user has Family tier subscription OR existing family subscription
-    final currentSub = _subscriptionService.currentSubscription;
-    final hasFamilyTier =
-        currentSub?.plan.tier.toString().contains('family') ?? false;
-    final hasFamilySubscription = _family != null;
-
-    if (!hasFamilyTier && !hasFamilySubscription) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Family Mode Dashboard')),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.family_restroom, size: 80, color: Colors.grey[400]),
-              const SizedBox(height: 24),
-              const Text(
-                'Family Plan Required',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Upgrade to Family Plan to access\nfamily tracking features',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: () =>
-                    Navigator.pushNamed(context, '/subscription/plans'),
-                icon: const Icon(Icons.upgrade),
-                label: const Text('View Plans'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryRed,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 16,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
       appBar: AppBar(
-        title: Text('${_family!.familyName ?? "Family"} Dashboard'),
+        title: const Text('Family Dashboard'),
         bottom: TabBar(
           controller: _tabController,
           tabs: const [

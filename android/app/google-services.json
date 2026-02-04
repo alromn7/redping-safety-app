@@ -7,12 +7,72 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:557287609270:android:31cb8513643fe0f6832717",
+        "android_client_info": {
+          "package_name": "com.redping.emergency"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "557287609270-3g017o02m7g4baonk04n4604cuto81qg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.emergency",
+            "certificate_hash": "f7f5e0275c7e95f6d0640081a0b8099d44891066"
+          }
+        },
+        {
+          "client_id": "557287609270-onkjf702emdrappg508blicqsv2dk21d.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.emergency",
+            "certificate_hash": "df3043a5f6295bed6cf3b7b2753dc5d97626b88a"
+          }
+        },
+        {
+          "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBJhW4EHzPwzfxuauXSB1k30w_rTml6Po"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "557287609270-9brr0lkc55eicbi51eihjpm7cp64bl9n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.redping.emergency"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:557287609270:android:ee97c332c47695a6832717",
         "android_client_info": {
           "package_name": "com.redping.redping"
         }
       },
       "oauth_client": [
+        {
+          "client_id": "557287609270-6j6tn0htch4qu2f44foilj2b2s9kiusf.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.redping",
+            "certificate_hash": "29943b607479a1f839994ae582139df8f9bcb5c6"
+          }
+        },
         {
           "client_id": "557287609270-dugl5fep3crffuf50r4ruffm72oa9k99.apps.googleusercontent.com",
           "client_type": 1,
@@ -39,10 +99,166 @@
               "client_type": 3
             },
             {
-              "client_id": "557287609270-ac22958el646s643t56esirqoj60luf2.apps.googleusercontent.com",
+              "client_id": "557287609270-9brr0lkc55eicbi51eihjpm7cp64bl9n.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.redping.redping"
+                "bundle_id": "com.redping.emergency"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:557287609270:android:6759ca5d68098272832717",
+        "android_client_info": {
+          "package_name": "com.redping.redping.sar"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "557287609270-9612k43ln1luctdftfh6ajk0vpcmh3g9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.redping.sar",
+            "certificate_hash": "df3043a5f6295bed6cf3b7b2753dc5d97626b88a"
+          }
+        },
+        {
+          "client_id": "557287609270-sdtihlef9iqetgfhb6sghnecr9tr91oc.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.redping.sar",
+            "certificate_hash": "406fc289d379cd0a22d7329a607abc7e91733b8a"
+          }
+        },
+        {
+          "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBJhW4EHzPwzfxuauXSB1k30w_rTml6Po"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "557287609270-9brr0lkc55eicbi51eihjpm7cp64bl9n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.redping.emergency"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:557287609270:android:f44bbf19c8a2d48d832717",
+        "android_client_info": {
+          "package_name": "com.redping.redping_doctor_plus"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "557287609270-5jc2d818ukjcf8est29qvg6u6e2n4mb7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.redping_doctor_plus",
+            "certificate_hash": "29943b607479a1f839994ae582139df8f9bcb5c6"
+          }
+        },
+        {
+          "client_id": "557287609270-721f27aultaa33ffrgfnejnbaq4v0e82.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.redping_doctor_plus",
+            "certificate_hash": "df3043a5f6295bed6cf3b7b2753dc5d97626b88a"
+          }
+        },
+        {
+          "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBJhW4EHzPwzfxuauXSB1k30w_rTml6Po"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "557287609270-9brr0lkc55eicbi51eihjpm7cp64bl9n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.redping.emergency"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:557287609270:android:8de92cf5449ca5cb832717",
+        "android_client_info": {
+          "package_name": "com.redping.sar"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "557287609270-pvkfva9ptgpogg30uk5cishb9k7a94fo.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.sar",
+            "certificate_hash": "df3043a5f6295bed6cf3b7b2753dc5d97626b88a"
+          }
+        },
+        {
+          "client_id": "557287609270-q6n3l5imh5eh9o30l6p24n8oaqt0fos2.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.redping.sar",
+            "certificate_hash": "f7f5e0275c7e95f6d0640081a0b8099d44891066"
+          }
+        },
+        {
+          "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBJhW4EHzPwzfxuauXSB1k30w_rTml6Po"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "557287609270-8qeqvu27a7epu8du5rmg52t1ofc8untu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "557287609270-9brr0lkc55eicbi51eihjpm7cp64bl9n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.redping.emergency"
               }
             }
           ]

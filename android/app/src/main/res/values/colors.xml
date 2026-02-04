@@ -4,4 +4,5 @@
     <color name="primary_color">#FF0000</color>
     <color name="accent_color">#00FF00</color>
     <color name="ic_launcher_background">#1A1A1A</color>
+    <color name="splash_background">#1A1A1A</color>
 </resources>

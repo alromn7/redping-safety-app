@@ -5,14 +5,14 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
 import '../core/constants/app_constants.dart';
 import '../models/sos_session.dart';
-import '../models/verification_result.dart';
-import 'ai_verification_service.dart';
+import '../models/detection_context.dart';
 import 'incident_escalation_coordinator.dart';
 import 'connectivity_monitor_service.dart';
 import 'location_service.dart';
 import 'notification_service.dart';
 import 'app_service_manager.dart';
 import 'test_mode_diagnostic_service.dart';
+import '../models/redping_mode.dart' show PowerMode, SensorConfig;
 
 /// Service for handling device sensors and crash/fall detection
 class SensorService {
@@ -30,6 +30,47 @@ class SensorService {
   factory SensorService() => _instance;
   SensorService._internal();
 
+  // RedPing Mode overrides
+  double? _crashThresholdOverride;
+  double? _fallThresholdOverride;
+  int? _samplingPeriodOverrideMs;
+  PowerMode? _powerModeOverride;
+
+  static const double _testModeCrashThreshold = 78.4; // 8G in m/s²
+  static const double _testModeFallThreshold = 48.0; // ~0.3m drop impact in m/s²
+
+  double _defaultCrashThreshold() {
+    return AppConstants.testingModeEnabled ? _testModeCrashThreshold : 180.0;
+  }
+
+  double _defaultFallThreshold() {
+    return AppConstants.testingModeEnabled ? _testModeFallThreshold : 150.0;
+  }
+
+  double _effectiveCrashThreshold() {
+    return _crashThresholdOverride ?? _crashThreshold;
+  }
+
+  double _effectiveFallThreshold() {
+    return _fallThresholdOverride ?? _fallThreshold;
+  }
+
+  void _resetThresholdsToDefaults() {
+    _crashThreshold = _defaultCrashThreshold();
+    _fallThreshold = _defaultFallThreshold();
+    _severeImpactThreshold = AppConstants.testingModeEnabled ? 147.0 : 250.0;
+    _reapplyThresholdOverridesIfAny();
+  }
+
+  void _reapplyThresholdOverridesIfAny() {
+    if (_crashThresholdOverride != null) {
+      _crashThreshold = _crashThresholdOverride!;
+    }
+    if (_fallThresholdOverride != null) {
+      _fallThreshold = _fallThresholdOverride!;
+    }
+  }
+
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
 
@@ -38,9 +79,6 @@ class SensorService {
 
   // User-requested flag for sensor upload
   final bool _userRequestedSensorUpload = false;
-
-  // AI Verification
-  AIVerificationService? _aiVerificationService;
 
   bool _isMonitoring = false;
   bool _crashDetectionEnabled =
@@ -85,7 +123,7 @@ class SensorService {
   double _fallThreshold =
       150.0; // m/s² - 1.5+ meter falls or TEST: 48 m/s² (0.3m falls)
   double _severeImpactThreshold =
-      250.0; // m/s² - 80+ km/h, bypass AI verification or TEST: 147 m/s² (15G)
+      250.0; // m/s² - 80+ km/h, immediate escalation or TEST: 147 m/s² (15G)
   // Extreme impact classification (captures and escalates instead of rejecting)
   static const double _extremeImpactThreshold =
       300.0; // m/s² - Human survivability limit (~30G). Capture, corroborate, escalate
@@ -135,7 +173,7 @@ class SensorService {
   Function(ImpactInfo)?
   _onViolentHandlingDetected; // Silent alert to emergency contacts
 
-  // Update throttling - Dynamic based on power mode (AI blueprint optimized)
+  // Update throttling - Dynamic based on power mode (blueprint optimized)
   DateTime? _lastUIUpdate;
   DateTime? _lastCrashCheck;
 
@@ -508,32 +546,8 @@ class SensorService {
         samplingPeriod: Duration(milliseconds: samplingRate),
       ).listen(_handleGyroscopeEvent);
 
-      // Initialize AI verification service if dependencies provided
+      // Optional: Start location tracking for movement/speed heuristics.
       if (locationService != null) {
-        _aiVerificationService = AIVerificationService(
-          locationService: locationService,
-        );
-        // Enable external feed to avoid duplicate sensor subscriptions inside AI.
-        _aiVerificationService!.enableExternalFeed(true);
-        await _aiVerificationService!.initialize();
-
-        // Set up verification callbacks
-        _aiVerificationService!.setVerificationCallback(_onVerificationResult);
-        _aiVerificationService!.setDetectionCallback(_onAIDetectionEvent);
-        // Gate AI voice verification behind SensorService blueprint conditions
-        _aiVerificationService!.setVerificationGate(_shouldStartAIVerification);
-
-        debugPrint('SensorService: AI verification service initialized');
-
-        // LAB: Suppress AI monitoring entirely to prevent unintended dialogs
-        if (AppConstants.labSuppressAllSOSDialogs) {
-          _aiVerificationService!.setMonitoring(false);
-          debugPrint(
-            'SensorService: [LAB] AI verification monitoring disabled',
-          );
-        }
-
-        // Start location tracking for movement/speed detection
         try {
           await locationService.startTracking();
           debugPrint(
@@ -600,8 +614,20 @@ class SensorService {
       return 10000; // 0.1 Hz - only check for major impacts during sleep
     }
 
+    // RedPing Mode: power/interval overrides (applied after sleep shortcut)
+    if (_powerModeOverride == PowerMode.high) {
+      final forced = AppConstants.sensorSamplingRateActiveMs;
+      if (_samplingPeriodOverrideMs != null) {
+        return _samplingPeriodOverrideMs!.clamp(50, 10000);
+      }
+      return forced;
+    }
+
     if (!_isLowPowerMode) {
       // Active mode (SOS): Always high frequency
+      if (_samplingPeriodOverrideMs != null) {
+        return _samplingPeriodOverrideMs!.clamp(50, 10000);
+      }
       return AppConstants.sensorSamplingRateActiveMs; // 100ms = 10Hz
     }
 
@@ -622,15 +648,29 @@ class SensorService {
     }
 
     // Standard low power mode: Adaptive based on battery
+    int rate;
     if (_currentBatteryLevel >= 50) {
-      return 500; // 2 Hz - Good battery
+      rate = 500; // 2 Hz - Good battery
     } else if (_currentBatteryLevel >= 25) {
-      return 1000; // 1 Hz - Medium battery
+      rate = 1000; // 1 Hz - Medium battery
     } else if (_currentBatteryLevel >= 15) {
-      return 2000; // 0.5 Hz - Low battery
+      rate = 2000; // 0.5 Hz - Low battery
     } else {
-      return 5000; // 0.2 Hz - Critical battery
+      rate = 5000; // 0.2 Hz - Critical battery
     }
+
+    // RedPing Mode: monitoring interval override is treated as a minimum period
+    // for low-power monitoring.
+    if (_samplingPeriodOverrideMs != null) {
+      rate = max(rate, _samplingPeriodOverrideMs!);
+    }
+
+    // RedPing Mode: enforce low power preference
+    if (_powerModeOverride == PowerMode.low) {
+      rate = max(rate, 1000);
+    }
+
+    return rate;
   }
 
   /// Adjust sampling rate based on current battery level
@@ -1038,8 +1078,14 @@ class SensorService {
     }
 
     // Initialize thresholds based on test mode setting (TEST MODE v2.0)
-    _crashThreshold = AppConstants.getCrashThreshold();
-    _fallThreshold = AppConstants.getFallThreshold();
+    // Avoid AppConstants.getCrashThreshold/getFallThreshold here because those
+    // values are not expressed in the same units used by SensorService.
+    if (_crashThresholdOverride == null) {
+      _crashThreshold = _defaultCrashThreshold();
+    }
+    if (_fallThresholdOverride == null) {
+      _fallThreshold = _defaultFallThreshold();
+    }
     _severeImpactThreshold = AppConstants.testingModeEnabled
         ? 147.0
         : 250.0; // 15G test vs 80+ km/h production
@@ -1152,7 +1198,7 @@ class SensorService {
       return; // Extreme path fully handled
     }
 
-    // TIER 1: SEVERE IMPACT - Bypass AI verification for extreme crashes (>250 m/s² = 80+ km/h)
+    // TIER 1: SEVERE IMPACT - Immediate escalation for extreme crashes (>250 m/s² = 80+ km/h)
     // Only trigger if sustained (not a brief sensor spike)
     if (magnitude > _severeImpactThreshold && _crashDetectionEnabled) {
       _addToBuffer(_accelerometerBuffer, reading);
@@ -1166,7 +1212,7 @@ class SensorService {
     // TIER 2: SIGNIFICANT IMPACT - Crash threshold (>180 m/s² = 60+ km/h)
     // TEST MODE v2.0: Uses lowered threshold (8G = 78.4 m/s²) while maintaining identical behavior
     // Require sustained pattern to avoid false positives from sensor spikes
-    final currentCrashThreshold = AppConstants.getCrashThreshold();
+    final currentCrashThreshold = _effectiveCrashThreshold();
     if (magnitude > currentCrashThreshold) {
       _addToBuffer(_accelerometerBuffer, reading);
 
@@ -1279,8 +1325,6 @@ class SensorService {
     // Evaluate power mode based on recent motion
     _maybeAdjustPowerMode(magnitude: magnitude);
 
-    // Feed AI verification service with external accelerometer event (no duplication)
-    _aiVerificationService?.processExternalAccelerometer(event);
   }
 
   /// Update motion tracking (lightweight, always runs)
@@ -1414,7 +1458,7 @@ class SensorService {
     return magnitude > threshold && magnitude > 12.0;
   }
 
-  /// Handle severe impact that bypasses AI verification (>250 m/s² = 80+ km/h crash)
+  /// Handle severe impact that triggers immediate escalation (>250 m/s² = 80+ km/h crash)
   /// CRITICAL: Still requires sustained pattern to avoid sensor glitches
   void _handleSevereImpact(SensorReading reading) {
     final now = DateTime.now();
@@ -1446,17 +1490,17 @@ class SensorService {
     final impactInfo = _calculateImpactInfo(
       _accelerometerBuffer,
       ImpactSeverity.critical,
-      'severe_impact_80kmh_sustained_bypass_ai',
+      'severe_impact_80kmh_sustained_immediate_escalation',
     );
 
     debugPrint(
-      'SensorService: SEVERE SUSTAINED IMPACT DETECTED! Magnitude: ${magnitude.toStringAsFixed(2)} m/s² - 80+ km/h crash, bypassing AI verification',
+      'SensorService: SEVERE SUSTAINED IMPACT DETECTED! Magnitude: ${magnitude.toStringAsFixed(2)} m/s² - 80+ km/h crash, immediate escalation',
     );
     _onCrashDetected?.call(impactInfo);
   }
 
   /// Handle extreme impact (≥300 m/s²): capture, corroborate, and escalate
-  /// Treated as critical and bypasses AI verification once sustained pattern confirmed
+  /// Treated as critical once sustained pattern confirmed
   void _handleExtremeImpact(SensorReading reading) {
     final now = DateTime.now();
 
@@ -1475,11 +1519,11 @@ class SensorService {
     final impactInfo = _calculateImpactInfo(
       _accelerometerBuffer,
       ImpactSeverity.critical,
-      'extreme_impact_30g_plus_bypass_ai',
+      'extreme_impact_30g_plus_immediate_escalation',
     );
 
     debugPrint(
-      'SensorService: EXTREME SUSTAINED IMPACT DETECTED! Magnitude: ${magnitude.toStringAsFixed(2)} m/s² (≥30G) - bypassing AI verification',
+      'SensorService: EXTREME SUSTAINED IMPACT DETECTED! Magnitude: ${magnitude.toStringAsFixed(2)} m/s² (≥30G) - immediate escalation',
     );
 
     _onCrashDetected?.call(impactInfo);
@@ -1515,8 +1559,6 @@ class SensorService {
 
     _addToBuffer(_gyroscopeBuffer, reading);
 
-    // Feed AI verification service with external gyroscope event
-    _aiVerificationService?.processExternalGyroscope(event);
   }
 
   /// Add reading to buffer and maintain size limit
@@ -1664,7 +1706,7 @@ class SensorService {
     }
   }
 
-  /// Check for crash based on acceleration magnitude - AI Blueprint Strategy
+  /// Check for crash based on acceleration magnitude - Blueprint strategy
   /// BLUEPRINT REQUIREMENT: Only trigger on 60+ km/h crashes (180+ m/s²) sustained over time
   void _checkForCrash(SensorReading reading) {
     final now = DateTime.now();
@@ -1766,7 +1808,7 @@ class SensorService {
 
     // (Verification handling moved above throttle)
 
-    // Phone drop filter (from AI blueprint - brief impact <100 m/s²)
+    // Phone drop filter (blueprint: brief impact <100 m/s²)
     if (magnitude < _phoneDropThreshold) {
       return; // Likely phone drop or normal movement
     }
@@ -1820,13 +1862,6 @@ class SensorService {
       _potentialCrashTime = now;
       _postImpactReadings.clear();
       _postImpactReadings.add(reading);
-
-      // Ensure AI Safety Assistant engages during the verification window
-      try {
-        AppServiceManager().temporarilyActivateAISafetyAssistant(
-          const Duration(minutes: 3),
-        );
-      } catch (_) {}
 
       debugPrint(
         'SensorService: Potential crash detected - Monitoring for 3s to verify vehicle stopped...${AppConstants.testingModeEnabled ? " [TEST MODE]" : ""}',
@@ -2123,7 +2158,7 @@ class SensorService {
     // Fall threshold: 100 m/s² = ~1 meter drop impact
     // TEST MODE v2.0: Uses lowered threshold (0.3m fall = 48 m/s²) while maintaining identical behavior
     // CRITICAL: Convert raw magnitudes to real-world acceleration
-    final currentFallThreshold = AppConstants.getFallThreshold();
+    final currentFallThreshold = _effectiveFallThreshold();
     final hasImpact = recentReadings
         .skip(recentReadings.length ~/ 2)
         .any(
@@ -2145,13 +2180,6 @@ class SensorService {
       // Mark fall as in progress and start cancellation window
       _isFallInProgress = true;
       _fallDetectedTime = now;
-
-      // Ensure AI Safety Assistant engages during fall cancellation window
-      try {
-        AppServiceManager().temporarilyActivateAISafetyAssistant(
-          const Duration(minutes: 3),
-        );
-      } catch (_) {}
 
       debugPrint(
         'SensorService: Fall detected - Height: ${fallHeight.toStringAsFixed(2)}m (>=${minFallHeight}m threshold)! Monitoring for phone pickup within ${_fallCancellationWindow.inSeconds}s...${AppConstants.testingModeEnabled ? " [TEST MODE]" : ""}',
@@ -2345,6 +2373,61 @@ class SensorService {
   double get crashThreshold => _crashThreshold;
   double get fallThreshold => _fallThreshold;
 
+  bool get hasRedPingModeOverrides =>
+      _crashThresholdOverride != null ||
+      _fallThresholdOverride != null ||
+      _samplingPeriodOverrideMs != null ||
+      _powerModeOverride != null;
+
+  /// Apply RedPing Mode sensor overrides.
+  /// Thresholds are in m/s² (SensorService units).
+  Future<void> applyRedPingModeConfig(SensorConfig config) async {
+    // Threshold overrides
+    _crashThresholdOverride = config.crashThreshold;
+    _fallThresholdOverride = config.fallThreshold;
+
+    // Apply immediately
+    if (AppConstants.testingModeEnabled) {
+      _crashThreshold = config.crashThreshold;
+      _fallThreshold = config.fallThreshold;
+    } else {
+      crashThreshold = config.crashThreshold;
+      fallThreshold = config.fallThreshold;
+    }
+
+    // Detection toggles
+    crashDetectionEnabled = config.enableMotionTracking;
+    fallDetectionEnabled = config.enableFreefallDetection;
+
+    // Sampling/power overrides
+    _samplingPeriodOverrideMs = config.monitoringInterval.inMilliseconds;
+    _powerModeOverride = config.powerMode;
+
+    // If already monitoring in low power mode, restart to apply samplingPeriod.
+    // Avoid restarting during SOS active mode.
+    if (_isMonitoring && _isLowPowerMode) {
+      stopMonitoring();
+      await Future.delayed(const Duration(milliseconds: 100));
+      await startMonitoring(lowPowerMode: _powerModeOverride == PowerMode.high ? false : true);
+    }
+  }
+
+  /// Clear RedPing Mode overrides and restore defaults.
+  Future<void> clearRedPingModeConfig() async {
+    _crashThresholdOverride = null;
+    _fallThresholdOverride = null;
+    _samplingPeriodOverrideMs = null;
+    _powerModeOverride = null;
+
+    _resetThresholdsToDefaults();
+
+    if (_isMonitoring && _isLowPowerMode) {
+      stopMonitoring();
+      await Future.delayed(const Duration(milliseconds: 100));
+      await startMonitoring(lowPowerMode: true);
+    }
+  }
+
   // Setters
   set crashDetectionEnabled(bool enabled) {
     _crashDetectionEnabled = enabled;
@@ -2362,7 +2445,8 @@ class SensorService {
 
   set crashThreshold(double threshold) {
     // Enforce blueprint minimum (60+ km/h ≈ 180 m/s²); allow modest increases for less sensitivity
-    final clamped = threshold.clamp(180.0, 220.0);
+    final min = AppConstants.testingModeEnabled ? 50.0 : 180.0;
+    final clamped = threshold.clamp(min, 220.0);
     _crashThreshold = clamped;
     debugPrint(
       'SensorService: Crash threshold set to ${clamped.toStringAsFixed(1)}',
@@ -2371,7 +2455,8 @@ class SensorService {
 
   set fallThreshold(double threshold) {
     // Enforce safe operational range to prevent false alarms and glitches
-    final clamped = threshold.clamp(140.0, 220.0);
+    final min = AppConstants.testingModeEnabled ? 20.0 : 140.0;
+    final clamped = threshold.clamp(min, 220.0);
     _fallThreshold = clamped;
     debugPrint(
       'SensorService: Fall threshold set to ${clamped.toStringAsFixed(1)}',
@@ -2403,6 +2488,9 @@ class SensorService {
       'fallDetectionEnabled': _fallDetectionEnabled,
       'crashThreshold': _crashThreshold,
       'fallThreshold': _fallThreshold,
+      'hasRedPingModeOverrides': hasRedPingModeOverrides,
+      'samplingPeriodOverrideMs': _samplingPeriodOverrideMs,
+      'powerModeOverride': _powerModeOverride?.toString(),
       'isCalibrated': _isCalibrated,
       'realWorldConversionActive': _isCalibrated,
       'accelerationScalingFactor': _accelerationScalingFactor,
@@ -2436,11 +2524,7 @@ class SensorService {
         final maxMagnitude = magnitudes.reduce(max);
 
         // Initialize thresholds based on test mode (TEST MODE v2.0)
-        _crashThreshold = AppConstants.getCrashThreshold();
-        _fallThreshold = AppConstants.getFallThreshold();
-        _severeImpactThreshold = AppConstants.testingModeEnabled
-            ? 147.0
-            : 250.0;
+        _resetThresholdsToDefaults();
 
         debugPrint(
           'SensorService: ✅ Enhanced calibration complete!${AppConstants.testingModeEnabled ? " [TEST MODE]" : ""}',
@@ -2477,172 +2561,6 @@ class SensorService {
   void simulateFall() {
     // Simulation disabled for production release
     // Fall simulation disabled for production
-  }
-
-  /// Dispose of the service
-  /// Handle AI verification result
-  void _onVerificationResult(VerificationResult result) {
-    // LAB: Suppress acting on verification results during testing
-    if (AppConstants.labSuppressAllSOSDialogs) {
-      debugPrint(
-        'SensorService: [LAB] Suppressing verification result handling',
-      );
-      return;
-    }
-    debugPrint(
-      'SensorService: AI verification result - ${result.outcome.name} (${(result.confidence * 100).toStringAsFixed(1)}%)',
-    );
-
-    // Notify IncidentEscalationCoordinator for fallback handling (no duplication for requiresSOS cases)
-    try {
-      // Lazy import via function-level to avoid circular imports at top
-      // ignore: avoid_types_as_parameter_names
-      final coordinator = IncidentEscalationCoordinator.instance;
-      coordinator.handleVerificationResult(result);
-    } catch (_) {
-      // If coordinator not linked yet, continue without fallback orchestration
-    }
-
-    // Only proceed with SOS if verification confirms genuine incident
-    if (result.requiresSOS) {
-      final impactInfo = ImpactInfo.fromVerification(
-        timestamp: result.timestamp,
-        magnitude: result.context.magnitude,
-        location: result.context.location,
-        isVerified: true,
-        verificationConfidence: result.confidence,
-        verificationReason: result.reason,
-      );
-
-      if (result.context.type == DetectionType.crash) {
-        _onCrashDetected?.call(impactInfo);
-      } else {
-        _onFallDetected?.call(impactInfo);
-      }
-    } else {
-      debugPrint(
-        'SensorService: Incident verified as false alarm - ${result.reason}',
-      );
-    }
-  }
-
-  /// Handle AI detection event
-  void _onAIDetectionEvent(DetectionEvent event) {
-    // LAB: Suppress any AI detection events during testing
-    if (AppConstants.labSuppressAllSOSDialogs) {
-      debugPrint('SensorService: [LAB] Suppressing AI detection event');
-      return;
-    }
-    debugPrint(
-      'SensorService: AI detection event - ${event.type.name} (${event.reason.name})',
-    );
-
-    // Gate verification UI: Only when a detection window is actually in progress
-    final bool inFallWindow = _isFallInProgress;
-
-    if (event.type == DetectionType.crash) {
-      // [TESTING MODE] Skip pattern check to allow all crashes through
-      debugPrint(
-        'SensorService: [TESTING MODE] Bypassing pattern check - allowing crash UI',
-      );
-
-      /* ORIGINAL PRODUCTION CODE - TEMPORARILY DISABLED
-      // If no crash window, also require strong crash patterns to show UI
-      if (!inCrashWindow) {
-        final hasSustained = _hasSustainedHighImpactPattern();
-        final hasDecel = _hasDecelerationPattern();
-        if (!(hasSustained && hasDecel)) {
-          debugPrint(
-            'SensorService: Suppressing crash verification UI - missing sustained/ decel patterns',
-          );
-          return;
-        }
-      }
-      */
-    }
-    if (event.type == DetectionType.fall) {
-      // Let the fall pipeline handle pickup-cancellation; avoid showing AI dialog for phone drops
-      if (!inFallWindow) {
-        debugPrint(
-          'SensorService: Ignoring AI fall verification - no fall window active',
-        );
-        return;
-      }
-      // Even if in fall window, defer to cancellation window first (no immediate UI)
-      debugPrint(
-        'SensorService: Fall in progress - deferring AI dialog to pickup-cancel flow',
-      );
-      return;
-    }
-
-    // Cooldown to prevent repeated verification prompts
-    final now = DateTime.now();
-    if (_lastVerificationUIShown != null &&
-        now.difference(_lastVerificationUIShown!) < _verificationUICooldown) {
-      debugPrint('SensorService: Verification UI suppressed by cooldown');
-      return;
-    }
-    _lastVerificationUIShown = now;
-
-    // Trigger verification UI
-    _onVerificationNeeded?.call(event);
-  }
-
-  /// Get AI verification service
-  AIVerificationService? get aiVerificationService => _aiVerificationService;
-
-  /// Callback for when verification UI is needed
-  Function(DetectionEvent)? _onVerificationNeeded;
-  // Cooldown to avoid repeatedly requesting verification UI
-  DateTime? _lastVerificationUIShown;
-  static const Duration _verificationUICooldown = Duration(seconds: 60);
-
-  /// Set verification needed callback
-  void setVerificationNeededCallback(Function(DetectionEvent) callback) {
-    _onVerificationNeeded = callback;
-  }
-
-  /// External gate for AI verification start: enforces blueprint preconditions
-  /// - Crash: Only allow if crash window is active OR sustained impact + deceleration patterns present
-  /// - Fall: Only allow if fall window is in progress (free-fall + impact >= 1m already detected)
-  bool _shouldStartAIVerification(DetectionContext context) {
-    // Never start verification when lab suppression is active
-    if (AppConstants.labSuppressAllSOSDialogs) return false;
-
-    // TESTING MODE: Allow ALL verifications to proceed
-    debugPrint(
-      'SensorService: [TESTING] Allowing AI verification for ${context.type.name}',
-    );
-    return true;
-
-    // Original strict checks commented out for testing
-    /*
-    switch (context.type) {
-      case DetectionType.crash:
-        final inCrashWindow = _isPotentialCrashInProgress;
-        if (inCrashWindow) return true;
-
-        final hasSustained = _hasSustainedHighImpactPattern();
-        final hasDecel = _hasDecelerationPattern();
-        if (!(hasSustained && hasDecel)) {
-          debugPrint(
-            'SensorService: Denying AI verification (crash) - missing sustained/deceleration patterns',
-          );
-          return false;
-        }
-        return true;
-
-      case DetectionType.fall:
-        if (!_isFallInProgress) {
-          debugPrint(
-            'SensorService: Denying AI verification (fall) - no fall window active',
-          );
-          return false;
-        }
-        // Defer to the existing pickup-cancel flow; allow AI to run only after we opened a fall window
-        return true;
-    }
-    */
   }
 
   // ========== ENHANCEMENT HELPER METHODS ==========
@@ -3103,6 +3021,8 @@ class SensorService {
           250.0; // Production: Higher threshold for boats (waves can be violent)
       _fallThreshold = 120.0; // Production: Adjust for boat movement
     }
+
+    _reapplyThresholdOverridesIfAny();
   }
 
   /// Deactivate boat mode - restore normal thresholds
@@ -3118,8 +3038,9 @@ class SensorService {
     debugPrint('  - Fall detection: NORMAL thresholds restored');
 
     // Restore thresholds based on test mode
-    _crashThreshold = AppConstants.getCrashThreshold();
-    _fallThreshold = AppConstants.getFallThreshold();
+    _crashThreshold = _defaultCrashThreshold();
+    _fallThreshold = _defaultFallThreshold();
+    _reapplyThresholdOverridesIfAny();
   }
 
   /// Get current boat mode status
@@ -3239,7 +3160,6 @@ class SensorService {
     _batteryCheckTimer?.cancel();
     _patternUpdateTimer?.cancel(); // Cancel pattern learning timer
     _movementTimeoutTimer?.cancel();
-    _aiVerificationService?.dispose();
   }
 
   // ===== Power Mode Evaluation =====
@@ -3370,5 +3290,57 @@ class SensorService {
       _lastStatusSummary = summary;
       _lastStatusLogTime = now;
     }
+  }
+
+  /// Print comprehensive diagnostics for troubleshooting ACFD issues
+  void printDiagnostics() {
+    debugPrint('');
+    debugPrint('═══════════════════════════════════════');
+    debugPrint('   SENSOR SERVICE DIAGNOSTICS');
+    debugPrint('═══════════════════════════════════════');
+    debugPrint('Status:');
+    debugPrint('  Monitoring: ${_isMonitoring ? "✅ ACTIVE" : "❌ STOPPED"}');
+    debugPrint(
+      '  Crash Detection: ${_crashDetectionEnabled ? "✅ ENABLED" : "❌ DISABLED"}',
+    );
+    debugPrint(
+      '  Fall Detection: ${_fallDetectionEnabled ? "✅ ENABLED" : "❌ DISABLED"}',
+    );
+    debugPrint('  Low Power Mode: ${_isLowPowerMode ? "🔋 YES" : "⚡ NO"}');
+    debugPrint('  Calibrated: ${_isCalibrated ? "✅ YES" : "⚠️ NO"}');
+    debugPrint('');
+    debugPrint('Thresholds:');
+    debugPrint('  Crash: ${_crashThreshold.toStringAsFixed(1)} m/s²');
+    debugPrint('  Fall: ${_fallThreshold.toStringAsFixed(1)} m/s²');
+    debugPrint('  Severe: ${_severeImpactThreshold.toStringAsFixed(1)} m/s²');
+    debugPrint('  Phone Drop: ${_phoneDropThreshold.toStringAsFixed(1)} m/s²');
+    debugPrint('');
+    debugPrint('Buffer Status:');
+    debugPrint('  Accelerometer: ${_accelerometerBuffer.length} readings');
+    debugPrint('  Gyroscope: ${_gyroscopeBuffer.length} readings');
+    debugPrint('');
+    debugPrint('Last Detection:');
+    debugPrint('  Crash: ${_lastCrashDetection?.toString() ?? "Never"}');
+    debugPrint('  Fall: ${_lastFallDetection?.toString() ?? "Never"}');
+    debugPrint('');
+    debugPrint('Battery:');
+    debugPrint('  Level: $_currentBatteryLevel%');
+    debugPrint('  Charging: ${_isCharging ? "Yes" : "No"}');
+    debugPrint('  Sleeping: ${_isLikelySleeping ? "Yes" : "No"}');
+    debugPrint('');
+    debugPrint('Test Mode:');
+    debugPrint(
+      '  Enabled: ${AppConstants.testingModeEnabled ? "✅ YES" : "❌ NO"}',
+    );
+    if (AppConstants.testingModeEnabled) {
+      debugPrint(
+        '  Crash Threshold (test): ${AppConstants.getCrashThreshold().toStringAsFixed(1)} m/s²',
+      );
+      debugPrint(
+        '  Fall Threshold (test): ${AppConstants.getFallThreshold().toStringAsFixed(1)} m/s²',
+      );
+    }
+    debugPrint('═══════════════════════════════════════');
+    debugPrint('');
   }
 }

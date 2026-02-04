@@ -18,6 +18,13 @@ $defines = @(
   "--dart-define=EXPECTED_ANDROID_SIG_SHA256=4A6ADAB5CD9AD2FA5670CD0222D470A1666B821F49D5266F4B1397AD57B500A9"
 )
 
+# Inject Stripe test publishable key if provided in environment
+if ($env:STRIPE_PUBLISHABLE_KEY_TEST -and $env:STRIPE_PUBLISHABLE_KEY_TEST.Trim().Length -gt 0) {
+  $defines += "--dart-define=STRIPE_PUBLISHABLE_KEY_TEST=$($env:STRIPE_PUBLISHABLE_KEY_TEST)"
+} else {
+  Write-Warning "STRIPE_PUBLISHABLE_KEY_TEST not set for staging run. Using fallback from core StripeConfig."
+}
+
 $cmd = @('flutter','run') + $defines
 if ($device -ne '') { $cmd += @('-d', $device) }
 

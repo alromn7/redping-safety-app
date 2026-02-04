@@ -17,6 +17,8 @@ import 'user_profile_service.dart';
 import 'notification_service.dart';
 import 'emergency_messaging_service.dart';
 import '../core/logging/app_logger.dart';
+import '../core/app/app_launch_config.dart';
+import '../core/app_variant.dart';
 
 /// Service for managing SOS pings visible to SAR members
 class SOSPingService {
@@ -39,6 +41,10 @@ class SOSPingService {
   bool _isInitialized = false;
   Timer? _pingUpdateTimer;
   Timer? _locationUpdateTimer;
+
+  // Local notification tracking (SAR app)
+  final Set<String> _notifiedPingIds = <String>{};
+  final Set<String> _acknowledgedPingIds = <String>{};
 
   // Callbacks
   Function(List<SOSPing>)? _onActivePingsUpdated;
@@ -83,6 +89,8 @@ class SOSPingService {
 
       // Load saved data (demo ping generation disabled - using real pings only)
       await _loadSavedPings();
+
+      await _loadAcknowledgedPingIds();
 
       // Clear old dummy pings from storage
       await _clearOldDummyPings();
@@ -242,6 +250,9 @@ class SOSPingService {
     _onActivePingsUpdated?.call(_activePings);
     _onAssignedPingsUpdated?.call(_assignedPings);
 
+    // Responder acknowledged this ping by taking action.
+    await acknowledgePingAlert(pingId);
+
     // Send notification to user
     await _notifyUser(updatedPing, response);
 
@@ -321,6 +332,8 @@ class SOSPingService {
     await _savePings();
     _onAssignedPingsUpdated?.call(_assignedPings);
     _onActivePingsUpdated?.call(_activePings);
+
+    await acknowledgePingAlert(pingId);
 
     AppLogger.i('Rescue completed for ping $pingId', tag: 'SOSPingService');
   }
@@ -1093,9 +1106,13 @@ class SOSPingService {
           .snapshots()
           .listen((snapshot) {
             bool changed = false;
-            for (final doc in snapshot.docs) {
+
+            // Use docChanges to correctly detect newly added pings.
+            for (final change in snapshot.docChanges) {
               try {
-                final data = doc.data();
+                final data = change.doc.data();
+                if (data == null) continue;
+
                 final ping = SOSPing.fromJson(data);
                 final index = _activePings.indexWhere((p) => p.id == ping.id);
                 if (index >= 0) {
@@ -1104,35 +1121,128 @@ class SOSPingService {
                   _activePings.add(ping);
                 }
                 changed = true;
+
+                if (change.type == DocumentChangeType.added) {
+                  _handleNewRemotePing(ping);
+                  _onNewPingReceived?.call(ping);
+                }
               } catch (e) {
                 debugPrint(
-                  'SOSPingService: Failed to parse Firestore ping: $e',
+                  'SOSPingService: Failed to process Firestore ping change: $e',
                 );
               }
             }
+
             if (changed) {
               _onActivePingsUpdated?.call(_activePings);
-              // Notify about new pings for cross-emulator communication
-              for (final doc in snapshot.docs) {
-                try {
-                  final data = doc.data();
-                  final ping = SOSPing.fromJson(data);
-                  final existingIndex = _activePings.indexWhere(
-                    (p) => p.id == ping.id,
-                  );
-                  if (existingIndex == -1) {
-                    // This is a new ping from another emulator
-                    _onNewPingReceived?.call(ping);
-                  }
-                } catch (e) {
-                  debugPrint('SOSPingService: Failed to notify new ping: $e');
-                }
-              }
             }
           });
       debugPrint('SOSPingService: Regional Firestore listener started');
     } catch (e) {
       debugPrint('SOSPingService: Failed to start Firestore listener: $e');
+    }
+  }
+
+  Future<void> _handleNewRemotePing(SOSPing ping) async {
+    // Only SAR variant should surface responder alerts.
+    if (AppLaunchConfig.variant != AppVariant.sar) return;
+    if (_acknowledgedPingIds.contains(ping.id)) return;
+    if (_notifiedPingIds.contains(ping.id)) return;
+
+    _notifiedPingIds.add(ping.id);
+
+    final title = '🆘 SOS PING RECEIVED';
+    final userName = ping.userName;
+    final loc = ping.location.address;
+    final body = [
+      if (userName != null && userName.isNotEmpty) 'Person: $userName',
+      if (loc != null && loc.isNotEmpty) 'Location: $loc',
+      'Tap to view and respond',
+    ].join(' • ');
+
+    // Immediate high-priority alert
+    await _notificationService.showNotification(
+      title: title,
+      body: body,
+      payload: 'sos_ping_alert:${ping.id}:now',
+      importance: NotificationImportance.max,
+      persistent: true,
+      notificationId: _notificationBaseIdForPing(ping.id),
+    );
+
+    // Repeat alerts to get attention (finite series)
+    await _schedulePingAlertSeries(pingId: ping.id, title: title, body: body);
+  }
+
+  int _notificationBaseIdForPing(String pingId) {
+    // Keep within Android notification ID bounds; stable enough per run.
+    return pingId.hashCode.abs().remainder(90000) + 1000;
+  }
+
+  Future<void> _schedulePingAlertSeries({
+    required String pingId,
+    required String title,
+    required String body,
+  }) async {
+    // Cancel any previous schedule for this ping to avoid duplicates.
+    await _notificationService.cancelScheduledByPayloadPrefix(
+      'sos_ping_alert:$pingId:',
+    );
+
+    final baseId = _notificationBaseIdForPing(pingId);
+    final now = DateTime.now();
+
+    const delays = <Duration>[
+      Duration(seconds: 30),
+      Duration(minutes: 1),
+      Duration(minutes: 2),
+      Duration(minutes: 5),
+      Duration(minutes: 10),
+    ];
+
+    for (var i = 0; i < delays.length; i++) {
+      await _notificationService.scheduleCalendarNotification(
+        id: baseId + i + 1,
+        dateTime: now.add(delays[i]),
+        title: title,
+        body: body,
+        payload: 'sos_ping_alert:$pingId:${i + 1}',
+        importance: NotificationImportance.max,
+      );
+    }
+  }
+
+  /// Stop repeating alerts for a ping once the responder has acknowledged it.
+  Future<void> acknowledgePingAlert(String pingId) async {
+    _acknowledgedPingIds.add(pingId);
+    await _saveAcknowledgedPingIds();
+    await _notificationService.cancelScheduledByPayloadPrefix(
+      'sos_ping_alert:$pingId:',
+    );
+  }
+
+  Future<void> _loadAcknowledgedPingIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('acknowledged_ping_ids') ?? const [];
+      _acknowledgedPingIds
+        ..clear()
+        ..addAll(list);
+    } catch (e) {
+      // Best-effort; do not block initialization.
+      debugPrint('SOSPingService: Failed to load acknowledged pings: $e');
+    }
+  }
+
+  Future<void> _saveAcknowledgedPingIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        'acknowledged_ping_ids',
+        _acknowledgedPingIds.toList(growable: false),
+      );
+    } catch (e) {
+      debugPrint('SOSPingService: Failed to save acknowledged pings: $e');
     }
   }
 

@@ -2,7 +2,7 @@ name: redping_14v
 description: "REDP!NG Safety Ecosystem - A comprehensive safety app with crash detection, SOS alerts, and community features."
 publish_to: 'none'
 
-version: 1.0.1+2
+version: 1.0.1+3
 
 environment:
   sdk: ^3.9.2

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -29,7 +31,7 @@ import 'sos_analytics_service.dart';
 import 'incident_escalation_coordinator.dart';
 import 'connectivity_monitor_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-
+import 'notification_service.dart';
 
 // Developer exemption email
 const String _developerEmail = 'alromn7@gmail.com';
@@ -50,14 +52,369 @@ class SOSService {
   final SosRepository _sosRepository = SosRepository();
   final BatteryOptimizationService _batteryService =
       BatteryOptimizationService();
+  final NotificationService _notificationService = NotificationService();
 
   SOSSession? _currentSession;
   Timer? _countdownTimer;
   Timer? _voiceVerificationTimer;
+  static const String _localActiveSessionIdPrefsKey =
+      'local_active_sos_session_id';
+
+  static const String _localActiveSessionJsonPrefsKey =
+      'local_active_sos_session_json';
+  static const String _localActiveSessionSavedAtPrefsKey =
+      'local_active_sos_session_saved_at';
+
+  String? _lastSarUpdateNotificationKey;
+
+  Future<void> _notifySenderOfSarUpdateIfNeeded({
+    required String sessionId,
+    required SOSStatus newStatus,
+    required String rawStatus,
+    String? responderId,
+    String? responderName,
+    String? responderOrgName,
+    String? responderTeamName,
+    String? acknowledgedByName,
+    String? acknowledgedByOrg,
+    String? assignedByName,
+    String? assignedByOrg,
+  }) async {
+    // Only notify for meaningful SAR-driven updates.
+    final normalized = rawStatus.toLowerCase();
+    const notifiable = {
+      'acknowledged',
+      'assigned',
+      'responder_assigned',
+      'en_route',
+      'enroute',
+      'on_scene',
+      'in_progress',
+    };
+
+    if (!notifiable.contains(normalized)) return;
+
+    // Deduplicate: Firestore can emit multiple snapshots.
+    final key =
+        '$sessionId|$normalized|${responderId ?? ''}|${responderName ?? ''}|${responderOrgName ?? ''}|${responderTeamName ?? ''}|${acknowledgedByName ?? ''}|${acknowledgedByOrg ?? ''}|${assignedByName ?? ''}|${assignedByOrg ?? ''}';
+    if (_lastSarUpdateNotificationKey == key) return;
+    _lastSarUpdateNotificationKey = key;
+
+    try {
+      if (!_notificationService.isInitialized) {
+        await _notificationService.initialize();
+      }
+
+      String phase;
+      String details;
+
+      String formatActor({String? name, String? org, String? team}) {
+        final parts = <String>[];
+        if (name != null && name.trim().isNotEmpty) parts.add(name.trim());
+        if (team != null && team.trim().isNotEmpty) parts.add(team.trim());
+        if (org != null && org.trim().isNotEmpty) parts.add(org.trim());
+        return parts.join(' • ');
+      }
+
+      switch (newStatus) {
+        case SOSStatus.acknowledged:
+          phase = 'Acknowledged';
+          final actor = formatActor(
+            name: acknowledgedByName ?? responderName,
+            org: acknowledgedByOrg,
+          );
+          details = actor.isNotEmpty
+              ? '$actor acknowledged your SOS.'
+              : 'SAR acknowledged your SOS.';
+          break;
+        case SOSStatus.assigned:
+          phase = 'Assigned';
+          final actor = formatActor(
+            name: responderName,
+            team: responderTeamName,
+            org: responderOrgName,
+          );
+          final assigner = formatActor(
+            name: assignedByName,
+            org: assignedByOrg,
+          );
+          details = actor.isNotEmpty
+              ? '$actor has been assigned.'
+              : 'A SAR responder has been assigned.';
+          if (assigner.isNotEmpty) {
+            details = '$details Assigned by $assigner.';
+          }
+          break;
+        case SOSStatus.enRoute:
+          phase = 'En Route';
+          final actor = formatActor(
+            name: responderName,
+            team: responderTeamName,
+            org: responderOrgName,
+          );
+          details = actor.isNotEmpty
+              ? '$actor is en route to you.'
+              : 'SAR is en route to your location.';
+          break;
+        case SOSStatus.onScene:
+          phase = 'On Scene';
+          final actor = formatActor(
+            name: responderName,
+            team: responderTeamName,
+            org: responderOrgName,
+          );
+          details = actor.isNotEmpty
+              ? '$actor has arrived on scene.'
+              : 'SAR has arrived on scene.';
+          break;
+        case SOSStatus.inProgress:
+          phase = 'In Progress';
+          details = 'Rescue operation is in progress.';
+          break;
+        default:
+          phase = 'Rescue Update';
+          details = 'Status updated: $rawStatus';
+      }
+
+      await _notificationService.showRescueStatusUpdate(phase, details);
+    } catch (e) {
+      // Never let notification failures interfere with SOS.
+      debugPrint('SOSService: Failed to notify SAR update (continuing) - $e');
+    }
+  }
+
+  Future<void> _setLocalActiveSessionId(String? sessionId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (sessionId == null || sessionId.trim().isEmpty) {
+        await prefs.remove(_localActiveSessionIdPrefsKey);
+        await prefs.remove(_localActiveSessionJsonPrefsKey);
+        await prefs.remove(_localActiveSessionSavedAtPrefsKey);
+      } else {
+        await prefs.setString(_localActiveSessionIdPrefsKey, sessionId);
+      }
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
+  Future<void> _persistLocalActiveSession(SOSSession session) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localActiveSessionIdPrefsKey, session.id);
+      await prefs.setString(
+        _localActiveSessionJsonPrefsKey,
+        jsonEncode(session.toJson()),
+      );
+      await prefs.setString(
+        _localActiveSessionSavedAtPrefsKey,
+        DateTime.now().toIso8601String(),
+      );
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
+  Future<SOSSession?> _tryRestoreLocalActiveSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final sessionId = prefs.getString(_localActiveSessionIdPrefsKey);
+      if (sessionId == null || sessionId.trim().isEmpty) return null;
+
+      // Prefer queued copy if present (offline activations).
+      try {
+        await OfflineSOSQueueService().initialize();
+      } catch (_) {}
+
+      final queued = OfflineSOSQueueService().getSessionById(sessionId);
+      if (queued != null) return queued;
+
+      final raw = prefs.getString(_localActiveSessionJsonPrefsKey);
+      if (raw == null || raw.trim().isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        final restored = SOSSession.fromJson(decoded);
+        if (restored.id.trim().isEmpty) return null;
+        if (restored.id != sessionId) return null;
+        return restored;
+      }
+    } catch (_) {
+      // best-effort only
+    }
+    return null;
+  }
+
+  Future<void> _adoptRestoredSession(SOSSession session) async {
+    _currentSession = session;
+
+    // Keep local marker + JSON in sync so the user doesn't “lose” their SOS
+    // across app restarts or temporary auth/network issues.
+    await _persistLocalActiveSession(session);
+
+    // Start Firestore listener for real-time updates.
+    _startFirestoreListener(session.id);
+
+    // If session is active (not just countdown), restart location tracking.
+    if (session.status != SOSStatus.countdown) {
+      await _locationService.startTracking();
+
+      // Reattach location writer to persist breadcrumb pings
+      if (!_locationWriterAttached) {
+        _locationService.setLocationUpdateCallback((loc) async {
+          // Guard: ensure session is still active
+          final current = _currentSession;
+          if (current == null || current.status != SOSStatus.active) return;
+          try {
+            await _sosRepository.addLocationPing(current.id, loc);
+            await _sosRepository.updateLatestLocation(current.id, loc);
+          } catch (e) {
+            AppLogger.w(
+              'Failed to persist location update',
+              tag: 'SOSService',
+              error: e,
+            );
+          }
+        });
+        _locationWriterAttached = true;
+      }
+    }
+
+    // Restart rescue response tracking if needed.
+    if (session.status == SOSStatus.active ||
+        session.status == SOSStatus.acknowledged ||
+        session.status == SOSStatus.assigned ||
+        session.status == SOSStatus.enRoute ||
+        session.status == SOSStatus.onScene ||
+        session.status == SOSStatus.inProgress) {
+      try {
+        await _rescueResponseService.startTrackingSession(session);
+      } catch (e) {
+        debugPrint('SOSService: Failed to restart rescue tracking: $e');
+      }
+    }
+
+    _onSessionStarted?.call(session);
+    _onSessionUpdated?.call(session);
+  }
+
+  /// Quick restore path used to keep the UI stable even when full service
+  /// initialization (Firebase/Auth/Firestore) is still in progress.
+  ///
+  /// This prevents users from accidentally starting a second SOS while the app
+  /// is still restoring the first one (common after offline app relaunch).
+  Future<void> quickRestoreFromLocalIfNeeded() async {
+    try {
+      final existing = _currentSession;
+      if (existing != null && !_isTerminalStatus(existing.status)) {
+        return;
+      }
+
+      final local = await _tryRestoreLocalActiveSession();
+      if (local == null) return;
+
+      // If fully initialized, adopt to attach listeners/tracking.
+      if (_isInitialized) {
+        try {
+          await _adoptRestoredSession(local);
+          return;
+        } catch (_) {
+          // Fall back to minimal adopt below.
+        }
+      }
+
+      // Minimal adopt: keep state visible + prevent duplicate activation.
+      _currentSession = local;
+      unawaited(_persistLocalActiveSession(local));
+      _onSessionStarted?.call(local);
+      _onSessionUpdated?.call(local);
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
   StreamSubscription<DocumentSnapshot>? _firestoreListener;
   bool _locationWriterAttached = false;
 
   bool _isInitialized = false;
+
+  Future<bool> _canResolveHost(
+    String host, {
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    try {
+      final addrs = await InternetAddress.lookup(host).timeout(timeout);
+      return addrs.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _canConnectToHost(
+    String host,
+    int port, {
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    try {
+      final socket = await Socket.connect(host, port, timeout: timeout);
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _canReachFirestore({
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    final sw = Stopwatch()..start();
+    try {
+      // First resolve to IPs with a hard timeout.
+      final addrs = await InternetAddress.lookup(
+        'firestore.googleapis.com',
+      ).timeout(timeout);
+      if (addrs.isEmpty) return false;
+
+      // Then attempt TCP connect to one of the resolved IPs.
+      // Using InternetAddress here avoids a second DNS lookup inside Socket.connect.
+      for (final addr in addrs.take(2)) {
+        final remaining =
+            timeout - Duration(milliseconds: sw.elapsedMilliseconds);
+        if (remaining <= Duration.zero) break;
+        try {
+          final socket = await Socket.connect(addr, 443, timeout: remaining);
+          socket.destroy();
+          return true;
+        } catch (_) {
+          // try next addr
+        }
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _computeEffectivelyOffline({
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    try {
+      return await (() async {
+        final results = await Connectivity().checkConnectivity();
+        final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
+        if (!hasInterfaces) return true;
+
+        final reachable = await ConnectivityMonitorService()
+            .isInternetReachable(timeout: timeout);
+        if (!reachable) return true;
+
+        // If Firestore backend can't be reached, treat as offline for SOS delivery.
+        final firestoreReachable = await _canReachFirestore(timeout: timeout);
+        return !firestoreReachable;
+      })().timeout(timeout, onTimeout: () => true);
+    } catch (_) {
+      return true;
+    }
+  }
 
   // Cooldown to prevent rapid re-starts of SOS sessions (reduces dialog spam)
   DateTime? _lastSessionStart;
@@ -77,12 +434,6 @@ class SOSService {
     try {
       // Initialize location service
       await _locationService.initialize();
-
-      // Initialize sensor service with location tracking
-      await _sensorService.startMonitoring(
-        locationService: _locationService,
-        lowPowerMode: true,
-      );
 
       // Initialize emergency contacts service
       await _contactsService.initialize();
@@ -128,9 +479,40 @@ class SOSService {
     try {
       final authUser = AuthService.instance.currentUser;
       if (authUser.id.isEmpty) {
-        debugPrint(
-          'SOSService: No authenticated user, skipping session restore',
-        );
+        // Auth can take time to restore on cold start; don't drop active SOS.
+        final local = await _tryRestoreLocalActiveSession();
+        if (local != null) {
+          debugPrint(
+            'SOSService: Restored active session from local storage: ${local.id} (status: ${local.status})',
+          );
+          AppLogger.i(
+            'Restore source=local (auth not ready) sessionId=${local.id} status=${local.status}',
+            tag: 'SOSService',
+          );
+          await _adoptRestoredSession(local);
+
+          // If we're offline, ensure the offline queue still has this session
+          // so it can publish as soon as the network returns.
+          try {
+            final offline = await _computeEffectivelyOffline(
+              timeout: const Duration(seconds: 2),
+            );
+            if (offline) {
+              await OfflineSOSQueueService().enqueue(
+                local,
+                reason: 'restore_local_offline',
+              );
+            }
+          } catch (_) {}
+        } else {
+          debugPrint(
+            'SOSService: No authenticated user and no local active session; skipping session restore',
+          );
+          AppLogger.i(
+            'Restore skipped: no auth + no local marker',
+            tag: 'SOSService',
+          );
+        }
         return;
       }
 
@@ -138,64 +520,36 @@ class SOSService {
       final activeSession = await _sosRepository.getActiveSession(authUser.id);
 
       if (activeSession == null) {
-        debugPrint('SOSService: No active session to restore');
+        // Firestore may be offline/unreachable. Fall back to local restore.
+        final local = await _tryRestoreLocalActiveSession();
+        if (local != null) {
+          debugPrint(
+            'SOSService: Firestore restore unavailable; restored from local storage: ${local.id} (status: ${local.status})',
+          );
+          AppLogger.i(
+            'Restore source=local (firestore unavailable) sessionId=${local.id} status=${local.status}',
+            tag: 'SOSService',
+          );
+          await _adoptRestoredSession(local);
+        } else {
+          debugPrint('SOSService: No active session to restore');
+          AppLogger.i(
+            'Restore source=none (no active session in firestore/local)',
+            tag: 'SOSService',
+          );
+        }
         return;
       }
 
       debugPrint(
         'SOSService: ✅ Restored active session: ${activeSession.id} (status: ${activeSession.status})',
       );
+      AppLogger.i(
+        'Restore source=firestore sessionId=${activeSession.id} status=${activeSession.status}',
+        tag: 'SOSService',
+      );
 
-      // Set the restored session as current
-      _currentSession = activeSession;
-
-      // Set up Firestore listener for real-time updates
-      _startFirestoreListener(activeSession.id);
-
-      // If session is active (not just countdown), restart location tracking
-      if (activeSession.status != SOSStatus.countdown) {
-        await _locationService.startTracking();
-
-        // Reattach location writer to persist breadcrumb pings
-        if (!_locationWriterAttached) {
-          _locationService.setLocationUpdateCallback((loc) async {
-            // Guard: ensure session is still active
-            final session = _currentSession;
-            if (session == null || session.status != SOSStatus.active) return;
-            try {
-              // Append ping to subcollection
-              await _sosRepository.addLocationPing(session.id, loc);
-              // Mirror latest into header for UI
-              await _sosRepository.updateLatestLocation(session.id, loc);
-            } catch (e) {
-              AppLogger.w(
-                'Failed to persist location update',
-                tag: 'SOSService',
-                error: e,
-              );
-            }
-          });
-          _locationWriterAttached = true;
-        }
-      }
-
-      // Restart rescue response tracking if needed
-      if (activeSession.status == SOSStatus.active ||
-          activeSession.status == SOSStatus.acknowledged ||
-          activeSession.status == SOSStatus.assigned ||
-          activeSession.status == SOSStatus.enRoute ||
-          activeSession.status == SOSStatus.onScene ||
-          activeSession.status == SOSStatus.inProgress) {
-        try {
-          await _rescueResponseService.startTrackingSession(activeSession);
-        } catch (e) {
-          debugPrint('SOSService: Failed to restart rescue tracking: $e');
-        }
-      }
-
-      // Notify UI that session was restored
-      _onSessionStarted?.call(activeSession);
-      _onSessionUpdated?.call(activeSession);
+      await _adoptRestoredSession(activeSession);
 
       AppLogger.i(
         'Active session restored: ${activeSession.id} (${activeSession.status})',
@@ -218,15 +572,44 @@ class SOSService {
     bool bringToSOSPage = true,
     String? escalationReasonCode,
   }) async {
+    // Guard: if the app is still restoring an ongoing SOS from local storage,
+    // avoid creating a duplicate session.
+    await quickRestoreFromLocalIfNeeded();
+
     // Check if there's already an active session (countdown or active)
     if (_currentSession != null &&
-        (_currentSession!.status == SOSStatus.countdown ||
-            _currentSession!.status == SOSStatus.active)) {
+        !_isTerminalStatus(_currentSession!.status)) {
       AppLogger.w(
         'Session already active. Returning existing session (no restart).',
         tag: 'SOSService',
       );
       return _currentSession!;
+    }
+
+    // Safety-net: if the local marker is missing but Firestore already has an
+    // active session doc for this user, adopt it instead of creating a second
+    // active session.
+    try {
+      final authUser = AuthService.instance.currentUser;
+      if (authUser.id.isNotEmpty) {
+        final effectivelyOffline = await _computeEffectivelyOffline(
+          timeout: const Duration(seconds: 2),
+        );
+        if (!effectivelyOffline) {
+          final existing = await _sosRepository
+              .findMostRecentActiveSessionByUser(authUser.id)
+              .timeout(const Duration(seconds: 2));
+          if (existing != null && !_isTerminalStatus(existing.status)) {
+            debugPrint(
+              'SOSService: Safety-net adopted existing active session from Firestore: ${existing.id} (status: ${existing.status})',
+            );
+            await _adoptRestoredSession(existing);
+            return _currentSession!;
+          }
+        }
+      }
+    } catch (_) {
+      // best-effort only
     }
 
     // Global cooldown: avoid re-starting sessions too frequently (allow manual override)
@@ -250,17 +633,33 @@ class SOSService {
     } catch (_) {}
 
     // Get current location
-    final location =
-        await _locationService.getCurrentLocation(
-          highAccuracy: true,
-          forceFresh: true,
-        ) ??
-        LocationInfo(
-          latitude: 0.0,
-          longitude: 0.0,
-          accuracy: 0.0,
-          timestamp: DateTime.now(),
+    LocationInfo? location;
+    try {
+      final future = _locationService.getCurrentLocation(
+        highAccuracy: true,
+        forceFresh: true,
+      );
+
+      // Integration/dev testing: don't hang the entire SOS flow waiting for a
+      // permission prompt or a GPS fix.
+      if (!kReleaseMode && AppConstants.testingModeEnabled) {
+        location = await future.timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => null,
         );
+      } else {
+        location = await future;
+      }
+    } catch (_) {
+      location = null;
+    }
+
+    location ??= LocationInfo(
+      latitude: 0.0,
+      longitude: 0.0,
+      accuracy: 0.0,
+      timestamp: DateTime.now(),
+    );
 
     // Get current user ID from AuthService (primary source of truth)
     final authUser = AuthService.instance.currentUser;
@@ -371,6 +770,12 @@ class SOSService {
 
     _lastSessionStart = DateTime.now();
 
+    // Mark this as the locally-active session so offline queue flushing
+    // won't publish ghost pings when no SOS is actually active.
+    // Best-effort only.
+    await _setLocalActiveSessionId(_currentSession!.id);
+    unawaited(_persistLocalActiveSession(_currentSession!));
+
     // Start countdown
     _startCountdown();
 
@@ -407,11 +812,44 @@ class SOSService {
   Future<SOSSession> activateSOSImmediately({
     SOSType type = SOSType.manual,
     String? userMessage,
+    ImpactInfo? impactInfo,
+    bool bringToSOSPage = true,
+    String? escalationReasonCode,
   }) async {
+    debugPrint('SOSService: activateSOSImmediately() called (type=$type)');
+
+    // Guard: if the app is still restoring an ongoing SOS from local storage,
+    // avoid creating a duplicate session.
+    await quickRestoreFromLocalIfNeeded();
+
     // Check if there's already an active session
     if (_currentSession != null &&
-        (_currentSession!.status == SOSStatus.countdown ||
-            _currentSession!.status == SOSStatus.active)) {
+        !_isTerminalStatus(_currentSession!.status)) {
+      debugPrint(
+        'SOSService: Session already active; id=${_currentSession!.id}, status=${_currentSession!.status}',
+      );
+
+      // If we're effectively offline (or Firestore is unreachable), make sure
+      // the active session is still queued for delivery.
+      try {
+        final effectivelyOffline = await _computeEffectivelyOffline(
+          timeout: const Duration(seconds: 2),
+        );
+        if (effectivelyOffline) {
+          await OfflineSOSQueueService().enqueue(
+            _currentSession!,
+            reason: 'active_session_existing_offline',
+          );
+          debugPrint(
+            'SOSService: Existing active session enqueued for offline delivery',
+          );
+        }
+      } catch (e) {
+        debugPrint(
+          'SOSService: Existing active session enqueue attempt failed: $e',
+        );
+      }
+
       AppLogger.w(
         'Session already active. Returning existing session.',
         tag: 'SOSService',
@@ -419,26 +857,69 @@ class SOSService {
       return _currentSession!;
     }
 
-    // Attempt to clear any stale activeSessionId pointer
+    // Safety-net: if the local marker is missing but Firestore already has an
+    // active session doc for this user, adopt it instead of creating a second
+    // active session.
     try {
       final authUser = AuthService.instance.currentUser;
       if (authUser.id.isNotEmpty) {
-        await _sosRepository.clearActiveSessionPointer(authUser.id);
-      }
-    } catch (_) {}
-
-    // Get current location
-    final location =
-        await _locationService.getCurrentLocation(
-          highAccuracy: true,
-          forceFresh: true,
-        ) ??
-        LocationInfo(
-          latitude: 0.0,
-          longitude: 0.0,
-          accuracy: 0.0,
-          timestamp: DateTime.now(),
+        final effectivelyOffline = await _computeEffectivelyOffline(
+          timeout: const Duration(seconds: 2),
         );
+        if (!effectivelyOffline) {
+          final existing = await _sosRepository
+              .findMostRecentActiveSessionByUser(authUser.id)
+              .timeout(const Duration(seconds: 2));
+          if (existing != null && !_isTerminalStatus(existing.status)) {
+            debugPrint(
+              'SOSService: Safety-net adopted existing active session from Firestore: ${existing.id} (status: ${existing.status})',
+            );
+            await _adoptRestoredSession(existing);
+            return _currentSession!;
+          }
+        }
+      }
+    } catch (_) {
+      // best-effort only
+    }
+    // Get current location.
+    // IMPORTANT: In airplane mode/offline, forcing a fresh GPS fix can take a
+    // long time and makes the UI look like SOS activation "failed".
+    // Use cached/last-known location offline; tracking will refine it later.
+    debugPrint('SOSService: activateSOSImmediately() computing offline…');
+    final effectivelyOffline = await _computeEffectivelyOffline(
+      timeout: const Duration(seconds: 2),
+    );
+    debugPrint(
+      'SOSService: activateSOSImmediately() effectivelyOffline=$effectivelyOffline',
+    );
+
+    // Attempt to clear any stale activeSessionId pointer (online-only).
+    // If Firestore/DNS is down, this can block. Never let it prevent SOS activation.
+    // NOTE: We intentionally do NOT clear the activeSessionId pointer to null.
+    // Clearing can create a brief window where backend rules/automation may
+    // interpret the session as stale and mark it resolved, causing SAR UI
+    // to show it briefly and then drop it.
+
+    LocationInfo? location;
+    try {
+      debugPrint('SOSService: activateSOSImmediately() fetching location…');
+      location = await _locationService.getCurrentLocation(
+        highAccuracy: true,
+        forceFresh: !effectivelyOffline,
+      );
+    } catch (_) {
+      location = null;
+    }
+    debugPrint(
+      'SOSService: activateSOSImmediately() location=${location != null}',
+    );
+    location ??= LocationInfo(
+      latitude: 0.0,
+      longitude: 0.0,
+      accuracy: 0.0,
+      timestamp: DateTime.now(),
+    );
 
     // Get current user ID from AuthService
     final authUser = AuthService.instance.currentUser;
@@ -520,12 +1001,37 @@ class SOSService {
       status: SOSStatus.active,
       startTime: DateTime.now(),
       location: location,
+      impactInfo: impactInfo,
       userMessage: userMessage,
       isTestMode: false,
-      metadata: metadata,
+      metadata: {
+        ...metadata,
+        if (escalationReasonCode != null && escalationReasonCode.isNotEmpty)
+          'escalationReason': escalationReasonCode,
+      },
     );
 
+    // Online-only: set pointer to this new session id ASAP to avoid any
+    // backend automation resolving it as "not the active" session.
+    if (!effectivelyOffline) {
+      try {
+        if (authUser.id.isNotEmpty) {
+          await _sosRepository
+              .setActiveSessionPointer(authUser.id, _currentSession!.id)
+              .timeout(const Duration(seconds: 2));
+        }
+      } catch (e) {
+        debugPrint(
+          'SOSService: Failed to set active session pointer early: $e',
+        );
+      }
+    }
+
     _lastSessionStart = DateTime.now();
+
+    // Mark this as the locally-active session for offline queue gating.
+    await _setLocalActiveSessionId(_currentSession!.id);
+    unawaited(_persistLocalActiveSession(_currentSession!));
 
     // Provide haptic feedback
     HapticFeedback.heavyImpact();
@@ -538,8 +1044,24 @@ class SOSService {
     // Notify UI immediately so offline activation shows without waiting
     _onSessionStarted?.call(_currentSession!);
 
+    if (bringToSOSPage) {
+      try {
+        AppRouter.router.go(AppRouter.main);
+      } catch (_) {}
+    }
+
     // Activate SOS (no countdown); performs networking/offline enqueue
-    await _activateSOS();
+    try {
+      await _activateSOS();
+    } catch (e) {
+      // Never treat activation as failed once the session is created; any
+      // downstream network/tracking errors should degrade to "queued".
+      AppLogger.w(
+        'SOS activation follow-up failed (non-fatal)',
+        tag: 'SOSService',
+        error: e,
+      );
+    }
 
     return _currentSession!;
   }
@@ -569,6 +1091,12 @@ class SOSService {
       status: SOSStatus.cancelled,
       endTime: DateTime.now(),
     );
+
+    // Clear offline queue + local active session marker.
+    try {
+      OfflineSOSQueueService().remove(cancelledSession.id, reason: 'cancelled');
+    } catch (_) {}
+    _setLocalActiveSessionId(null);
 
     _currentSession = null;
 
@@ -606,70 +1134,129 @@ class SOSService {
     } catch (_) {}
   }
 
+  /// Immediately activate an in-progress countdown.
+  ///
+  /// Used for hands-free scenarios (e.g. yelling for help / groaning in pain)
+  /// to escalate faster than the full countdown window.
+  Future<bool> activateCountdownNow({
+    required String reason,
+    String? transcription,
+  }) async {
+    if (_currentSession == null) return false;
+    if (_currentSession!.status != SOSStatus.countdown) return false;
+
+    try {
+      _countdownTimer?.cancel();
+    } catch (_) {}
+
+    try {
+      final extra = (transcription == null || transcription.trim().isEmpty)
+          ? ''
+          : ' | heard: ${transcription.trim()}';
+      addMessage(
+        'Countdown accelerated: $reason$extra',
+        MessageType.systemMessage,
+      );
+    } catch (_) {}
+
+    await _activateSOS();
+    return true;
+  }
+
   /// Activate SOS (after countdown or immediately)
   Future<void> _activateSOS() async {
     if (_currentSession == null) return;
 
+    debugPrint('SOSService: _activateSOS() start (id=${_currentSession!.id})');
+
     _countdownTimer?.cancel();
 
-    // Determine connectivity upfront, treating Wi‑Fi without internet as offline
-    bool isOffline = true;
-    try {
-      final results = await Connectivity().checkConnectivity();
-      final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
-      if (!hasInterfaces) {
-        isOffline = true;
-      } else {
-        // Probe internet reachability quickly (2s timeout)
-        isOffline =
-            !(await ConnectivityMonitorService().isInternetReachable(
-          timeout: const Duration(seconds: 2),
-        ));
-      }
-    } catch (_) {
-      isOffline = true;
+    // Mark the session ACTIVE immediately when the countdown completes.
+    // Downstream initialization (sensors/location/network persistence) should
+    // not block the user's emergency state.
+    if (_currentSession!.status != SOSStatus.active) {
+      _currentSession = _currentSession!.copyWith(status: SOSStatus.active);
+      try {
+        _onSessionUpdated?.call(_currentSession!);
+      } catch (_) {}
     }
 
-    // Clear any stale active session pointer to prevent Cloud Function from auto-resolving this session
+    // Determine connectivity upfront, treating Wi‑Fi without internet as offline.
+    // Also treat "Firestore unreachable" as offline so we enqueue reliably.
+    debugPrint('SOSService: _activateSOS() computing offline…');
+    final isOffline = await _computeEffectivelyOffline(
+      timeout: const Duration(seconds: 2),
+    );
+    debugPrint('SOSService: _activateSOS() isOffline=$isOffline');
+
+    // IMPORTANT: Do not clear the pointer to null here.
+    // Instead, ensure it points at the new session id as early as possible.
     if (!isOffline) {
       try {
         final authUser = AuthService.instance.currentUser;
         if (authUser.id.isNotEmpty) {
-          await _sosRepository.clearActiveSessionPointer(authUser.id);
+          await _sosRepository.setActiveSessionPointer(
+            authUser.id,
+            _currentSession!.id,
+          );
           debugPrint(
-            'SOSService: Cleared stale active session pointer before activation',
+            'SOSService: Active session pointer set before persist (sessionId=${_currentSession!.id})',
           );
         }
       } catch (e) {
-        debugPrint('SOSService: Failed to clear active session pointer - $e');
+        debugPrint(
+          'SOSService: Failed to set active session pointer pre-persist - $e',
+        );
       }
     }
 
-    // Switch sensors to ACTIVE MODE for high-frequency monitoring during SOS
+    // Ensure sensors are running, then switch to ACTIVE MODE for SOS.
+    // Driving Mode may have already started monitoring; if not, start here.
     try {
+      if (!_sensorService.isMonitoring) {
+        await _sensorService.startMonitoring(
+          locationService: _locationService,
+          lowPowerMode: false,
+        );
+      }
       await _sensorService.setActiveMode();
       debugPrint('SOSService: Sensors switched to ACTIVE MODE');
     } catch (e) {
-      debugPrint('SOSService: Failed to switch sensor mode - $e');
+      debugPrint('SOSService: Failed to start/switch sensor mode - $e');
     }
 
     // Activate satellite service for SOS
     _satelliteService.activateForSOS();
 
-    // Update session status
-    _currentSession = _currentSession!.copyWith(status: SOSStatus.active);
-
-    // Get fresh location
-    final currentLocation = await _locationService.getCurrentLocation(
-      highAccuracy: true,
-      forceFresh: true,
-    );
-    if (currentLocation != null) {
-      _currentSession = _currentSession!.copyWith(location: currentLocation);
+    // Get location.
+    // When offline, do not block activation waiting for a fresh GPS fix.
+    try {
+      final currentLocation = await _locationService.getCurrentLocation(
+        highAccuracy: true,
+        forceFresh: !isOffline,
+      );
+      if (currentLocation != null) {
+        _currentSession = _currentSession!.copyWith(location: currentLocation);
+      }
+    } catch (e) {
+      // Never let location failures abort SOS activation.
+      AppLogger.w(
+        'Failed to refresh current location (non-fatal)',
+        tag: 'SOSService',
+        error: e,
+      );
     }
 
     // Start location tracking for real-time updates
-    await _locationService.startTracking();
+    try {
+      await _locationService.startTracking();
+    } catch (e) {
+      AppLogger.w(
+        'Failed to start location tracking (non-fatal)',
+        tag: 'SOSService',
+        error: e,
+      );
+    }
 
     // Attach location writer to persist breadcrumb pings and keep header fresh
     if (!_locationWriterAttached) {
@@ -681,12 +1268,12 @@ class SOSService {
         // Skip Firestore writes when offline (or Wi‑Fi without internet)
         try {
           final results = await Connectivity().checkConnectivity();
-          final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
-          if (!hasInterfaces) return;
-          final reachable =
-              await ConnectivityMonitorService().isInternetReachable(
-            timeout: const Duration(seconds: 2),
+          final hasInterfaces = results.any(
+            (r) => r != ConnectivityResult.none,
           );
+          if (!hasInterfaces) return;
+          final reachable = await ConnectivityMonitorService()
+              .isInternetReachable(timeout: const Duration(seconds: 2));
           if (!reachable) return;
         } catch (_) {
           return;
@@ -730,6 +1317,21 @@ class SOSService {
           );
           // Adopt server-assigned id
           _currentSession = _currentSession!.copyWith(id: sessionId);
+          // Keep local marker in sync so queue gating doesn't mis-classify
+          // a valid active SOS as stale.
+          await _setLocalActiveSessionId(sessionId);
+          unawaited(_persistLocalActiveSession(_currentSession!));
+
+          // Pointer must match the adopted id.
+          try {
+            final authUser = AuthService.instance.currentUser;
+            if (authUser.id.isNotEmpty) {
+              await _sosRepository.setActiveSessionPointer(
+                authUser.id,
+                _currentSession!.id,
+              );
+            }
+          } catch (_) {}
         } catch (e) {
           // Fallback: client-side merge write
           AppLogger.w(
@@ -742,28 +1344,36 @@ class SOSService {
         // Merge app-side fields (contacts, profile, impact, etc.) into header
         await _sosRepository.createOrUpdateFromSession(_currentSession!);
 
-        // Set the active session pointer so Cloud Function knows this is the current session
-        try {
-          final authUser = AuthService.instance.currentUser;
-          if (authUser.id.isNotEmpty) {
-            await _sosRepository.setActiveSessionPointer(
-              authUser.id,
-              _currentSession!.id,
-            );
-          }
-        } catch (e) {
-          debugPrint('SOSService: Failed to set active session pointer - $e');
-        }
+        // Pointer is set pre-persist (and again after server id adoption).
 
         // Start listening for status updates from SAR coordinators
         _startFirestoreListener(_currentSession!.id);
+
+        // Publish SAR dashboard ping when online.
+        // This is idempotent per sessionId inside SOSPingService.
+        try {
+          await _sosPingService.createPingFromSession(_currentSession!);
+          debugPrint(
+            'SOSService: Published SOS ping to SAR dashboard for session ${_currentSession!.id}',
+          );
+        } catch (e) {
+          AppLogger.w(
+            'Failed to publish SOS ping to SAR dashboard (non-fatal)',
+            tag: 'SOSService',
+            error: e,
+          );
+        }
 
         AppLogger.i(
           'SOS session persisted to Firestore and listener started',
           tag: 'SOSService',
         );
       } catch (e) {
-        AppLogger.w('Failed to persist sos_session', tag: 'SOSService', error: e);
+        AppLogger.w(
+          'Failed to persist sos_session',
+          tag: 'SOSService',
+          error: e,
+        );
         // Queue for offline delivery and continue app flow
         try {
           await OfflineSOSQueueService().enqueue(
@@ -775,14 +1385,30 @@ class SOSService {
     } else {
       // Offline: enqueue immediately and offer SMS prompt
       try {
+        // Start listening even while offline. The doc may not exist yet, but
+        // once the offline queue flushes, SAR updates will flow through.
+        _startFirestoreListener(_currentSession!.id);
+
         await OfflineSOSQueueService().enqueue(
           _currentSession!,
           reason: 'offline',
         );
-        await OfflineSOSQueueService().offerSmsPrompt(_currentSession!);
-        AppLogger.i('Offline mode: SOS enqueued and SMS prompt shown', tag: 'SOSService');
+        AppLogger.i('Offline mode: SOS enqueued', tag: 'SOSService');
+        debugPrint('SOSService: Offline enqueue done');
       } catch (e) {
         AppLogger.w('Offline enqueue failed', tag: 'SOSService', error: e);
+        debugPrint('SOSService: Offline enqueue FAILED: $e');
+      }
+
+      try {
+        await OfflineSOSQueueService().offerSmsPrompt(_currentSession!);
+        AppLogger.i('Offline mode: SMS prompt offered', tag: 'SOSService');
+      } catch (e) {
+        AppLogger.w(
+          'Offline mode: failed to offer SMS prompt (non-fatal)',
+          tag: 'SOSService',
+          error: e,
+        );
       }
     }
 
@@ -802,13 +1428,18 @@ class SOSService {
       final contacts = _contactsService.enabledContacts;
       if (contacts.isNotEmpty) {
         final prefs = await SharedPreferences.getInstance();
-        final enableSms = prefs.getBool('enable_sms_notifications') ?? false;
+        final enableSms =
+            (prefs.getBool('always_allow_emergency_sms') ?? false) ||
+            (prefs.getBool('enable_sms_notifications') ?? false);
         final results = await Connectivity().checkConnectivity();
         final hasMobile = results.any((r) => r == ConnectivityResult.mobile);
         bool hasInternet = false;
         try {
-          final hasInterfaces = results.any((r) => r != ConnectivityResult.none);
-          hasInternet = hasInterfaces &&
+          final hasInterfaces = results.any(
+            (r) => r != ConnectivityResult.none,
+          );
+          hasInternet =
+              hasInterfaces &&
               await ConnectivityMonitorService().isInternetReachable(
                 timeout: const Duration(seconds: 2),
               );
@@ -861,7 +1492,10 @@ class SOSService {
         if (!smsStarted && !hasInternet) {
           try {
             await OfflineSOSQueueService().offerSmsPrompt(_currentSession!);
-            AppLogger.i('No internet/mobile: offered SMS prompt', tag: 'SOSService');
+            AppLogger.i(
+              'No internet/mobile: offered SMS prompt',
+              tag: 'SOSService',
+            );
           } catch (_) {}
         }
       }
@@ -888,10 +1522,10 @@ class SOSService {
     // Send emergency SOS via satellite if available
     await _sendSatelliteEmergencyAlert();
 
-    // Start voice verification if not test mode
-    if (!_currentSession!.isTestMode) {
-      _startVoiceVerification();
-    }
+    // Voice verification must not start after SOS is ACTIVE.
+    // Countdown/verification UX happens pre-activation (during countdown) so
+    // users can cancel/confirm. Post-activation prompts can cause accidental
+    // cancellation (e.g., TTS echo or late callback scheduling).
 
     // Strong haptic feedback
     HapticFeedback.heavyImpact();
@@ -914,15 +1548,28 @@ class SOSService {
     } catch (_) {}
 
     // Start tracking rescue responses
-    await _rescueResponseService.startTrackingSession(_currentSession!);
-
-    // Create SOS ping for SAR coordination (may be disabled by config)
     try {
-      await _sosPingService.createPingFromSession(_currentSession!);
-      AppLogger.i('SOS ping created for SAR coordination', tag: 'SOSService');
+      await _rescueResponseService.startTrackingSession(_currentSession!);
     } catch (e) {
-      AppLogger.w('Failed to create SOS ping', tag: 'SOSService', error: e);
-      // Continue without SOS ping
+      AppLogger.w(
+        'Failed to start rescue response tracking (non-fatal)',
+        tag: 'SOSService',
+        error: e,
+      );
+    }
+
+    // Create SOS ping for SAR coordination (online-only).
+    // When offline, let OfflineSOSQueueService publish once internet returns.
+    if (!isOffline) {
+      try {
+        await _sosPingService.createPingFromSession(_currentSession!);
+        AppLogger.i('SOS ping created for SAR coordination', tag: 'SOSService');
+      } catch (e) {
+        AppLogger.w('Failed to create SOS ping', tag: 'SOSService', error: e);
+        // Continue without SOS ping
+      }
+    } else {
+      debugPrint('SOSService: Offline - skipping SAR ping creation for now');
     }
 
     // Auto-call monitoring removed - SMS notifications handle emergency alerts
@@ -1013,21 +1660,51 @@ class SOSService {
     }
 
     debugPrint(
-      'SOSService: Crash detected (${impactInfo.accelerationMagnitude.toStringAsFixed(2)} m/s²), starting auto SOS',
+      'SOSService: Crash detected (avg=${impactInfo.accelerationMagnitude.toStringAsFixed(2)} m/s², max=${impactInfo.maxAcceleration.toStringAsFixed(2)} m/s²), starting auto SOS',
     );
 
-    // Get current location
-    final location =
-        await _locationService.getCurrentLocation(
-          highAccuracy: true,
-          forceFresh: true,
-        ) ??
+    // High-speed crash bypass: reserved for genuinely extreme impacts.
+    // In test mode, shake-based triggers should show the countdown UX so the
+    // user can cancel/verify; do not bypass the countdown in test mode.
+    if (!AppConstants.testingModeEnabled) {
+      final bypassThreshold = AppConstants.highSpeedCrashBypassThreshold;
+      if (impactInfo.maxAcceleration >= bypassThreshold) {
+        debugPrint(
+          'SOSService: High-speed impact (max=${impactInfo.maxAcceleration.toStringAsFixed(1)} m/s²) >= ${bypassThreshold.toStringAsFixed(1)} m/s²; bypassing countdown.',
+        );
+        try {
+          await activateSOSImmediately(
+            type: SOSType.crashDetection,
+            userMessage: _generateCrashMessage(impactInfo),
+            impactInfo: impactInfo,
+            bringToSOSPage: true,
+            escalationReasonCode: 'high_speed_crash_bypass_countdown',
+          );
+        } catch (e) {
+          debugPrint('SOSService: High-speed bypass activation failed: $e');
+        }
+        return;
+      }
+    }
+
+    // Get location best-effort, but do not block the countdown UI.
+    // ACFD countdown must appear immediately so the user can cancel/verify.
+    LocationInfo location =
+        _locationService.currentLocationInfo ??
         LocationInfo(
           latitude: 0.0,
           longitude: 0.0,
           accuracy: 0.0,
           timestamp: DateTime.now(),
         );
+    try {
+      final fresh = await _locationService
+          .getCurrentLocation(highAccuracy: true, forceFresh: false)
+          .timeout(const Duration(seconds: 2));
+      if (fresh != null) location = fresh;
+    } catch (_) {
+      // keep cached/default
+    }
 
     // Get current user ID
     final currentUser = _userProfileService.currentProfile;
@@ -1078,18 +1755,23 @@ class SOSService {
       'SOSService: Fall detected (${impactInfo.accelerationMagnitude.toStringAsFixed(2)} m/s²), starting auto SOS',
     );
 
-    // Get current location
-    final location =
-        await _locationService.getCurrentLocation(
-          highAccuracy: true,
-          forceFresh: true,
-        ) ??
+    // Get location best-effort, but do not block the countdown UI.
+    LocationInfo location =
+        _locationService.currentLocationInfo ??
         LocationInfo(
           latitude: 0.0,
           longitude: 0.0,
           accuracy: 0.0,
           timestamp: DateTime.now(),
         );
+    try {
+      final fresh = await _locationService
+          .getCurrentLocation(highAccuracy: true, forceFresh: false)
+          .timeout(const Duration(seconds: 2));
+      if (fresh != null) location = fresh;
+    } catch (_) {
+      // keep cached/default
+    }
 
     // Get current user ID
     final currentUser = _userProfileService.currentProfile;
@@ -1312,8 +1994,16 @@ class SOSService {
     );
 
     if (!isConfirmed) {
-      // If user denied, cancel the SOS
-      cancelSOS();
+      // Never cancel an already-active SOS from voice verification.
+      // Only allow cancellation while still in countdown.
+      if (_currentSession?.status == SOSStatus.countdown) {
+        cancelSOS();
+      } else {
+        debugPrint(
+          'SOSService: Voice verification cancelled/denied but SOS already active; ignoring cancellation',
+        );
+        _onSessionUpdated?.call(_currentSession!);
+      }
     } else {
       debugPrint('SOSService: Voice verification confirmed');
       _onSessionUpdated?.call(_currentSession!);
@@ -1374,6 +2064,14 @@ class SOSService {
       endTime: DateTime.now(),
     );
 
+    // Clear offline queue + local active session marker early.
+    try {
+      await OfflineSOSQueueService()
+          .remove(resolvedSession.id, reason: 'resolved')
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    await _setLocalActiveSessionId(null);
+
     // Stop tracking rescue responses
     _rescueResponseService.stopTrackingSession(resolvedSession.id);
 
@@ -1415,7 +2113,9 @@ class SOSService {
 
     // Mark associated SOS ping as resolved
     try {
-      _sosPingService.resolvePingBySessionId(sessionId);
+      await _sosPingService
+          .resolvePingBySessionId(sessionId)
+          .timeout(const Duration(seconds: 4));
       debugPrint(
         'SOSService: Marked SOS ping as resolved for session $sessionId',
       );
@@ -1425,20 +2125,27 @@ class SOSService {
 
     // Update persistence
     try {
-      _sosRepository.updateStatus(
-        resolvedSession.id,
-        status: 'resolved',
-        endTime: resolvedSession.endTime,
-        extra: isDeveloper
-            ? {'resolvedByDeveloper': true, 'developerEmail': authUser.email}
-            : null,
-      );
+      // Use full session upsert to avoid NOT_FOUND when the initial create
+      // failed (e.g., transient offline) but we are now online.
+      final extra = isDeveloper
+          ? {'resolvedByDeveloper': true, 'developerEmail': authUser.email}
+          : null;
+      final sessionToPersist = extra == null
+          ? resolvedSession
+          : resolvedSession.copyWith(
+              metadata: {...resolvedSession.metadata, ...extra},
+            );
+      await _sosRepository
+          .createOrUpdateFromSession(sessionToPersist)
+          .timeout(const Duration(seconds: 4));
     } catch (_) {}
 
     // Clear active session pointer so future sessions don't get auto-resolved
     try {
       if (authUser.id.isNotEmpty) {
-        _sosRepository.clearActiveSessionPointer(authUser.id);
+        await _sosRepository
+            .clearActiveSessionPointer(authUser.id)
+            .timeout(const Duration(seconds: 4));
       }
     } catch (_) {}
 
@@ -1482,6 +2189,14 @@ class SOSService {
       status: SOSStatus.falseAlarm,
       endTime: DateTime.now(),
     );
+
+    // Clear offline queue + local active session marker.
+    try {
+      await OfflineSOSQueueService()
+          .remove(falseAlarmSession.id, reason: 'false_alarm')
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    _setLocalActiveSessionId(null);
 
     // Stop tracking rescue responses
     _rescueResponseService.stopTrackingSession(falseAlarmSession.id);
@@ -1629,6 +2344,9 @@ class SOSService {
       // Cancel existing listener if any
       _firestoreListener?.cancel();
 
+      // Reset per-session notification dedupe
+      _lastSarUpdateNotificationKey = null;
+
       // Listen to sos_sessions collection for status updates
       _firestoreListener = FirebaseFirestore.instance
           .collection('sos_sessions')
@@ -1638,9 +2356,74 @@ class SOSService {
             (DocumentSnapshot snapshot) {
               if (!snapshot.exists) return;
 
+              // If the in-memory session has ended (or no longer matches), ignore.
+              final activeSession = _currentSession;
+              if (activeSession == null || activeSession.id != sessionId) {
+                return;
+              }
+
               try {
                 final data = snapshot.data() as Map<String, dynamic>?;
                 if (data == null) return;
+
+                final docMetadata = data['metadata'] is Map<String, dynamic>
+                    ? (data['metadata'] as Map<String, dynamic>)
+                    : (data['metadata'] is Map
+                          ? Map<String, dynamic>.from(data['metadata'] as Map)
+                          : <String, dynamic>{});
+
+                String? readString(dynamic v) {
+                  if (v == null) return null;
+                  final s = v.toString();
+                  return s.trim().isEmpty ? null : s;
+                }
+
+                final responderId = readString(
+                  docMetadata['responderId'] ?? data['responderId'],
+                );
+                final responderName = readString(
+                  docMetadata['responderName'] ??
+                      data['responderName'] ??
+                      (data['responder'] is Map<String, dynamic>
+                          ? ((data['responder']['name'] ??
+                                    data['responder']['displayName'])
+                                as String?)
+                          : null),
+                );
+                final responderOrgName = readString(
+                  docMetadata['responderOrgName'],
+                );
+                final responderTeamName = readString(
+                  docMetadata['responderTeamName'],
+                );
+                final acknowledgedByName = readString(
+                  docMetadata['acknowledgedByName'],
+                );
+                final acknowledgedByOrg = readString(
+                  docMetadata['acknowledgedByOrg'],
+                );
+                final assignedByName = readString(
+                  docMetadata['assignedByName'],
+                );
+                final assignedByOrg = readString(docMetadata['assignedByOrg']);
+
+                final priorStatus = _currentSession?.status;
+                final priorResponderId =
+                    _currentSession?.metadata['responderId'] as String?;
+                final priorResponderName =
+                    _currentSession?.metadata['responderName'] as String?;
+                final priorResponderOrgName =
+                    _currentSession?.metadata['responderOrgName'] as String?;
+                final priorResponderTeamName =
+                    _currentSession?.metadata['responderTeamName'] as String?;
+                final priorAcknowledgedByName =
+                    _currentSession?.metadata['acknowledgedByName'] as String?;
+                final priorAcknowledgedByOrg =
+                    _currentSession?.metadata['acknowledgedByOrg'] as String?;
+                final priorAssignedByName =
+                    _currentSession?.metadata['assignedByName'] as String?;
+                final priorAssignedByOrg =
+                    _currentSession?.metadata['assignedByOrg'] as String?;
 
                 // Check if status has changed
                 final firestoreStatus = data['status'] as String?;
@@ -1690,14 +2473,40 @@ class SOSService {
                       _currentSession?.metadata['rawStatus'] != firestoreStatus;
 
                   if (shouldUpdate) {
+                    final mergedMeta = Map<String, dynamic>.from(
+                      _currentSession!.metadata,
+                    )..['rawStatus'] = firestoreStatus;
+                    if (responderId != null) {
+                      mergedMeta['responderId'] = responderId;
+                    }
+                    if (responderName != null) {
+                      mergedMeta['responderName'] = responderName;
+                    }
+                    if (responderOrgName != null) {
+                      mergedMeta['responderOrgName'] = responderOrgName;
+                    }
+                    if (responderTeamName != null) {
+                      mergedMeta['responderTeamName'] = responderTeamName;
+                    }
+                    if (acknowledgedByName != null) {
+                      mergedMeta['acknowledgedByName'] = acknowledgedByName;
+                    }
+                    if (acknowledgedByOrg != null) {
+                      mergedMeta['acknowledgedByOrg'] = acknowledgedByOrg;
+                    }
+                    if (assignedByName != null) {
+                      mergedMeta['assignedByName'] = assignedByName;
+                    }
+                    if (assignedByOrg != null) {
+                      mergedMeta['assignedByOrg'] = assignedByOrg;
+                    }
+
                     _currentSession = _currentSession!.copyWith(
                       status: newStatus,
-                      metadata: {
-                        ..._currentSession!.metadata,
-                        'rawStatus':
-                            firestoreStatus, // Preserve raw status for UI
-                      },
+                      metadata: mergedMeta,
                     );
+
+                    unawaited(_persistLocalActiveSession(_currentSession!));
 
                     AppLogger.i(
                       'SOS status updated from Firestore: $firestoreStatus -> $newStatus',
@@ -1709,6 +2518,37 @@ class SOSService {
 
                     // Provide haptic feedback for status change
                     HapticFeedback.mediumImpact();
+
+                    // Notify sender of SAR action updates (best-effort)
+                    unawaited(
+                      _notifySenderOfSarUpdateIfNeeded(
+                        sessionId: sessionId,
+                        newStatus: newStatus,
+                        rawStatus: firestoreStatus,
+                        responderId: responderId,
+                        responderName: responderName,
+                        responderOrgName: responderOrgName,
+                        responderTeamName: responderTeamName,
+                        acknowledgedByName: acknowledgedByName,
+                        acknowledgedByOrg: acknowledgedByOrg,
+                        assignedByName: assignedByName,
+                        assignedByOrg: assignedByOrg,
+                      ),
+                    );
+
+                    // If SAR ended the session remotely, perform local cleanup so
+                    // SOS UI resets and background tracking stops.
+                    if (_isTerminalStatus(newStatus) &&
+                        (priorStatus == null ||
+                            !_isTerminalStatus(priorStatus))) {
+                      unawaited(
+                        _handleRemoteSessionEnded(
+                          sessionId: sessionId,
+                          terminalStatus: newStatus,
+                          rawStatus: firestoreStatus,
+                        ),
+                      );
+                    }
                   }
                 }
 
@@ -1732,6 +2572,7 @@ class SOSService {
                         _currentSession = _currentSession!.copyWith(
                           rescueTeamResponses: responses,
                         );
+                        unawaited(_persistLocalActiveSession(_currentSession!));
                         hasResponseUpdate = true;
                         AppLogger.i(
                           'SAR team responses updated: ${responses.length} responses',
@@ -1749,17 +2590,15 @@ class SOSService {
                 }
 
                 // Check for SAR responder assignment
-                final responderId = data['responderId'] as String?;
-                final responderName =
-                    data['responderName'] as String? ??
-                    (data['responder'] is Map<String, dynamic>
-                        ? ((data['responder']['name'] ??
-                                  data['responder']['displayName'])
-                              as String?)
-                        : null);
-                if (responderId != null && responderId.isNotEmpty) {
+                final hasResponderIdentity =
+                    (responderId != null && responderId.isNotEmpty) ||
+                    (responderName != null && responderName.isNotEmpty) ||
+                    (responderOrgName != null && responderOrgName.isNotEmpty) ||
+                    (responderTeamName != null && responderTeamName.isNotEmpty);
+
+                if (hasResponderIdentity) {
                   AppLogger.i(
-                    'SAR responder assigned: $responderId${responderName != null ? ' ($responderName)' : ''}',
+                    'SAR responder assigned: ${responderId ?? '-'}${responderName != null ? ' ($responderName)' : ''}',
                     tag: 'SOSService',
                   );
                   // Store responder info in session metadata so UI can display it
@@ -1768,7 +2607,9 @@ class SOSService {
                       _currentSession!.metadata,
                     );
                     bool changed = false;
-                    if (currentMeta['responderId'] != responderId) {
+
+                    if (responderId != null &&
+                        currentMeta['responderId'] != responderId) {
                       currentMeta['responderId'] = responderId;
                       changed = true;
                     }
@@ -1777,11 +2618,80 @@ class SOSService {
                       currentMeta['responderName'] = responderName;
                       changed = true;
                     }
+                    if (responderOrgName != null &&
+                        currentMeta['responderOrgName'] != responderOrgName) {
+                      currentMeta['responderOrgName'] = responderOrgName;
+                      changed = true;
+                    }
+                    if (responderTeamName != null &&
+                        currentMeta['responderTeamName'] != responderTeamName) {
+                      currentMeta['responderTeamName'] = responderTeamName;
+                      changed = true;
+                    }
+                    if (acknowledgedByName != null &&
+                        currentMeta['acknowledgedByName'] !=
+                            acknowledgedByName) {
+                      currentMeta['acknowledgedByName'] = acknowledgedByName;
+                      changed = true;
+                    }
+                    if (acknowledgedByOrg != null &&
+                        currentMeta['acknowledgedByOrg'] != acknowledgedByOrg) {
+                      currentMeta['acknowledgedByOrg'] = acknowledgedByOrg;
+                      changed = true;
+                    }
+                    if (assignedByName != null &&
+                        currentMeta['assignedByName'] != assignedByName) {
+                      currentMeta['assignedByName'] = assignedByName;
+                      changed = true;
+                    }
+                    if (assignedByOrg != null &&
+                        currentMeta['assignedByOrg'] != assignedByOrg) {
+                      currentMeta['assignedByOrg'] = assignedByOrg;
+                      changed = true;
+                    }
+
                     if (changed || hasResponseUpdate) {
                       _currentSession = _currentSession!.copyWith(
                         metadata: currentMeta,
                       );
+                      unawaited(_persistLocalActiveSession(_currentSession!));
                       _onSessionUpdated?.call(_currentSession!);
+
+                      // Assignment can arrive without a status transition.
+                      final identityChanged =
+                          (priorResponderId != responderId) ||
+                          (priorResponderName != responderName) ||
+                          (priorResponderOrgName != responderOrgName) ||
+                          (priorResponderTeamName != responderTeamName) ||
+                          (priorAcknowledgedByName != acknowledgedByName) ||
+                          (priorAcknowledgedByOrg != acknowledgedByOrg) ||
+                          (priorAssignedByName != assignedByName) ||
+                          (priorAssignedByOrg != assignedByOrg);
+
+                      if (identityChanged) {
+                        // Provide subtle feedback for responder identity changes.
+                        HapticFeedback.selectionClick();
+
+                        final effectiveStatus =
+                            _currentSession?.metadata['rawStatus'] as String?;
+                        if (effectiveStatus != null) {
+                          unawaited(
+                            _notifySenderOfSarUpdateIfNeeded(
+                              sessionId: sessionId,
+                              newStatus: _currentSession!.status,
+                              rawStatus: effectiveStatus,
+                              responderId: responderId,
+                              responderName: responderName,
+                              responderOrgName: responderOrgName,
+                              responderTeamName: responderTeamName,
+                              acknowledgedByName: acknowledgedByName,
+                              acknowledgedByOrg: acknowledgedByOrg,
+                              assignedByName: assignedByName,
+                              assignedByOrg: assignedByOrg,
+                            ),
+                          );
+                        }
+                      }
                     }
                   }
                 } else if (hasResponseUpdate && _currentSession != null) {
@@ -1825,11 +2735,122 @@ class SOSService {
     AppLogger.i('Firestore listener stopped', tag: 'SOSService');
   }
 
+  bool _isTerminalStatus(SOSStatus status) {
+    return status == SOSStatus.resolved ||
+        status == SOSStatus.cancelled ||
+        status == SOSStatus.falseAlarm;
+  }
+
+  Future<void> _handleRemoteSessionEnded({
+    required String sessionId,
+    required SOSStatus terminalStatus,
+    required String rawStatus,
+  }) async {
+    final session = _currentSession;
+    if (session == null || session.id != sessionId) return;
+
+    // Prevent re-entrancy and stop listening immediately.
+    _countdownTimer?.cancel();
+    _voiceVerificationTimer?.cancel();
+    _stopFirestoreListener();
+
+    // Switch sensors back to LOW POWER MODE when SOS ends
+    unawaited(
+      _sensorService
+          .setLowPowerMode()
+          .then((_) {
+            debugPrint(
+              'SOSService: Sensors switched back to LOW POWER MODE (remote end)',
+            );
+          })
+          .catchError((e) {
+            debugPrint('SOSService: Failed to switch sensor mode - $e');
+          }),
+    );
+
+    // Deactivate satellite service
+    try {
+      _satelliteService.deactivateFromSOS();
+    } catch (_) {}
+
+    // Detach location writer to stop persisting pings
+    if (_locationWriterAttached) {
+      try {
+        // Replace with no-op to avoid nullability changes in LocationService
+        _locationService.setLocationUpdateCallback((_) {});
+      } catch (_) {}
+      _locationWriterAttached = false;
+    }
+    try {
+      _locationService.stopTracking();
+    } catch (_) {}
+
+    final endedSession = session.copyWith(
+      status: terminalStatus,
+      endTime: DateTime.now(),
+      metadata: {
+        ...session.metadata,
+        'rawStatus': rawStatus,
+        'endedBy': 'remote',
+      },
+    );
+
+    // Clear offline queue + local active session marker.
+    try {
+      await OfflineSOSQueueService()
+          .remove(endedSession.id, reason: rawStatus)
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    try {
+      await _setLocalActiveSessionId(null);
+    } catch (_) {}
+
+    // Stop tracking rescue responses
+    try {
+      _rescueResponseService.stopTrackingSession(endedSession.id);
+    } catch (_) {}
+
+    // Stop SMS notifications and send a final SMS
+    try {
+      await SMSService.instance.stopSMSNotifications(
+        sessionId,
+        sendFinalSMS: true,
+      );
+    } catch (_) {}
+
+    // Stop push notification scheduler and send final notification
+    try {
+      await NotificationScheduler.instance.stopNotifications(
+        sessionId,
+        sendFinalNotification: true,
+      );
+    } catch (_) {}
+
+    // Clear active session pointer so future sessions don't get auto-resolved
+    try {
+      final authUser = AuthService.instance.currentUser;
+      if (authUser.id.isNotEmpty) {
+        await _sosRepository
+            .clearActiveSessionPointer(authUser.id)
+            .timeout(const Duration(seconds: 4));
+      }
+    } catch (_) {}
+
+    _currentSession = null;
+    _onSessionEnded?.call(endedSession);
+
+    // Stop background foreground service
+    try {
+      ForegroundServiceManager.stop();
+    } catch (_) {}
+  }
+
   /// Dispose of the service
   /// Handle session updates from rescue response service
   void _handleSessionUpdated(SOSSession updatedSession) {
     if (_currentSession?.id == updatedSession.id) {
       _currentSession = updatedSession;
+      unawaited(_persistLocalActiveSession(updatedSession));
       _onSessionUpdated?.call(updatedSession);
     }
   }

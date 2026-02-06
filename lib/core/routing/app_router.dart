@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../config/env.dart';
 import '../../features/sos/presentation/pages/sos_page.dart';
 import '../../features/sos/presentation/pages/emergency_card_page.dart';
+import '../../features/sos/presentation/pages/redping_help_status_page.dart';
 import '../../features/safety/presentation/pages/safety_dashboard_page.dart';
 // Safety Fund routes removed (feature canceled)
 // Community chat removed - now available on RedPing website only
@@ -39,14 +40,12 @@ import '../../shared/presentation/pages/onboarding_page.dart';
 import '../../shared/presentation/pages/splash_page.dart';
 import '../../services/auth_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/connectivity_monitor_service.dart';
 // sar_chat_screen import removed - community chat removed
-// RedPing Doctor
-import '../../features/doctor/pages/medication_list_page.dart';
-import '../../features/doctor/pages/medication_editor_page.dart';
-import '../../features/doctor/pages/appointment_list_page.dart';
-import '../../features/doctor/pages/medical_profile_editor_page.dart';
 import '../app/app_launch_config.dart';
 import '../app_variant.dart';
+import '../constants/app_constants.dart';
+import 'package:flutter/foundation.dart';
 
 /// Simple notifier to trigger router refreshes from a stream
 class _GoRouterRefreshStream extends ChangeNotifier {
@@ -111,6 +110,7 @@ class AppRouter {
   static const String organizationRegistration = '/organization-registration';
   static const String organizationDashboard = '/organization-dashboard';
   static const String sosPingDashboard = '/sos-ping-dashboard';
+  static const String redpingHelpStatus = '/redping-help-status';
   static const String helpAssistant = '/help-assistant';
   static const String activities = '/activities';
   static const String createActivity = '/activities/create';
@@ -135,6 +135,16 @@ class AppRouter {
       // Splash must be allowed to load and perform async initializations
       final isSplash = state.matchedLocation == splash;
 
+      final isEmergencyVariant =
+          AppLaunchConfig.variant == AppVariant.emergency;
+      final isEmergencyCoreRoute =
+          state.matchedLocation == main ||
+          state.matchedLocation == sos ||
+          state.matchedLocation == safety ||
+          state.matchedLocation.startsWith(profile) ||
+          state.matchedLocation.startsWith(settings) ||
+          state.matchedLocation.startsWith(emergencyContacts);
+
       // Variant gating: SOS build should not expose SAR routes.
       if (AppLaunchConfig.variant == AppVariant.emergency &&
           state.matchedLocation.startsWith(sar)) {
@@ -148,9 +158,31 @@ class AppRouter {
       final isAuthRoute =
           state.matchedLocation == login || state.matchedLocation == signup;
       final isEmergencyCardRoute = state.matchedLocation.startsWith('/sos/');
-      final isEmailLinkRoute = state.matchedLocation.startsWith(emailLinkSignIn);
+      final isEmailLinkRoute = state.matchedLocation.startsWith(
+        emailLinkSignIn,
+      );
 
-      if (!isAuthed && !isSplash && !isAuthRoute && !isEmergencyCardRoute && !isEmailLinkRoute) {
+      // SOS app is allowed to be used without login only when offline.
+      // ConnectivityMonitorService is primed in SplashPage.
+      final effectivelyOffline =
+          ConnectivityMonitorService().isEffectivelyOffline;
+
+      if (!isAuthed &&
+          !isSplash &&
+          !isAuthRoute &&
+          !isEmergencyCardRoute &&
+          !isEmailLinkRoute) {
+        // Integration/dev testing: allow SOS to run without auth gating.
+        if (!kReleaseMode &&
+            isEmergencyVariant &&
+            isEmergencyCoreRoute &&
+            AppConstants.testingModeEnabled) {
+          return null;
+        }
+        // Emergency/SOS app must remain usable offline.
+        if (isEmergencyVariant && isEmergencyCoreRoute && effectivelyOffline) {
+          return null;
+        }
         return login;
       }
 
@@ -285,42 +317,6 @@ class AppRouter {
             builder: (context, state) => const SARPage(),
           ),
 
-          // RedPing Doctor - Health utilities (medications & appointments)
-          GoRoute(
-            path: '/doctor/medications',
-            name: 'doctor-medications',
-            builder: (context, state) {
-              final userId = AuthService.instance.currentUser.id;
-              return MedicationListPage(userId: userId);
-            },
-          ),
-          GoRoute(
-            path: '/doctor/medications/edit',
-            name: 'doctor-medications-edit',
-            builder: (context, state) {
-              final userId = AuthService.instance.currentUser.id;
-              final extra = state.extra;
-              final med = (extra is Map && extra['medication'] != null)
-                  ? extra['medication'] as dynamic
-                  : null;
-              // We avoid strict typing here to prevent import cycles; page validates type.
-              return MedicationEditorPage(userId: userId, medication: med);
-            },
-          ),
-          GoRoute(
-            path: '/doctor/appointments',
-            name: 'doctor-appointments',
-            builder: (context, state) {
-              final userId = AuthService.instance.currentUser.id;
-              return AppointmentListPage(userId: userId);
-            },
-          ),
-          GoRoute(
-            path: '/doctor/profile',
-            name: 'doctor-profile',
-            builder: (context, state) => const MedicalProfileEditorPage(),
-          ),
-
           // SAR Registration
           GoRoute(
             path: sarRegistration,
@@ -354,6 +350,14 @@ class AppRouter {
             path: sosPingDashboard,
             name: 'sos-ping-dashboard',
             builder: (context, state) => const SARPage(),
+          ),
+          // REDP!NG Help Status (SOS civilian tracking)
+          GoRoute(
+            path: redpingHelpStatus,
+            name: 'redping-help-status',
+            builder: (context, state) => RedpingHelpStatusPage(
+              pingId: state.uri.queryParameters['pingId'],
+            ),
           ),
           GoRoute(
             path: helpAssistant,
@@ -626,7 +630,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
     final locInterval = _serviceManager.batteryOptimizationService
         .getRecommendedLocationInterval();
     final backgroundInterval = _serviceManager.batteryOptimizationService
-      .getRecommendedBackgroundProcessingInterval();
+        .getRecommendedBackgroundProcessingInterval();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Device Settings')),

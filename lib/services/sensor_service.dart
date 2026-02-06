@@ -2439,6 +2439,34 @@ class SensorService {
     _gyroscopeBuffer.clear();
   }
 
+  @visibleForTesting
+  void debugResetForTest() {
+    _clearBuffers();
+    _lastViolentHandlingDetection = null;
+    _violentHandlingCount = 0;
+    _sessionStartTime = null;
+  }
+
+  @visibleForTesting
+  bool debugIsValidSensorReading(double x, double y, double z) {
+    return _isValidSensorReading(x, y, z);
+  }
+
+  @visibleForTesting
+  void debugAddAccelerometerReading(SensorReading reading) {
+    _addToBuffer(_accelerometerBuffer, reading);
+  }
+
+  @visibleForTesting
+  void debugAddGyroscopeReading(SensorReading reading) {
+    _addToBuffer(_gyroscopeBuffer, reading);
+  }
+
+  @visibleForTesting
+  void debugCheckForViolentHandling(SensorReading reading) {
+    _checkForViolentHandling(reading);
+  }
+
   /// Validate sensor reading values to prevent extreme/invalid data
   bool _isValidSensorReading(double x, double y, double z) {
     // Check for NaN or infinite values

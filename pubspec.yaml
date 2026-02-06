@@ -2,7 +2,7 @@ name: redping_14v
 description: "REDP!NG Safety Ecosystem - A comprehensive safety app with crash detection, SOS alerts, and community features."
 publish_to: 'none'
 
-version: 1.0.1+3
+version: 1.0.1+4
 
 environment:
   sdk: ^3.9.2
@@ -80,7 +80,7 @@ dependencies:
   mobile_scanner: ^5.0.0
   
   # AI & Speech Recognition
-  # speech_to_text: ^7.0.0  # REMOVED: Phase 1 - already commented out as broken
+  speech_to_text: ^7.0.0      # On-device speech recognition (voice verification/commands)
   flutter_tts: ^4.2.0  # RE-ENABLED: Needed for onboarding tutorial narration
   android_intent_plus: ^5.1.0
   quick_actions: ^1.1.0

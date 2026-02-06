@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/theme/app_theme.dart';
 import 'package:redping_14v/utils/activity_classifier.dart';
@@ -18,6 +19,7 @@ import '../../../../services/location_service.dart';
 import '../../../../services/connectivity_monitor_service.dart';
 import '../../../../services/sms_service.dart';
 import '../../../../models/sos_session.dart' hide MessageType;
+import '../../../../models/sos_ping.dart';
 import '../../../../models/emergency_contact.dart';
 import '../../../../models/redping_mode.dart';
 import '../../../../models/hazard_alert.dart';
@@ -30,6 +32,9 @@ import '../widgets/redping_logo_button.dart';
 import '../widgets/sensor_data_display.dart';
 import '../widgets/active_mode_dashboard.dart';
 import '../widgets/emergency_hotline_card.dart';
+import '../widgets/sos_countdown_dialog.dart';
+import '../widgets/voice_verification_dialog.dart';
+import '../widgets/sensor_calibration_status_banner.dart';
 // Removed old inline test widget in favor of a comprehensive test page
 import 'redping_mode_selection_page.dart';
 import '../../../../services/redping_mode_service.dart';
@@ -42,6 +47,7 @@ import '../../../redping_mode/presentation/pages/travel_mode_dashboard.dart';
 import '../../../redping_mode/presentation/pages/work_mode_dashboard.dart';
 import '../../../../services/offline_sos_queue_service.dart';
 import '../../../../services/emergency_contacts_service.dart';
+import '../../../../services/auth_service.dart';
 
 /// Main SOS page with emergency button and safety features
 class SOSPage extends StatefulWidget {
@@ -68,11 +74,45 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   SOSSession? _currentSession;
   bool _isSOSActive = false;
   bool _isCountdownActive = false;
+  bool _isSOSActivating = false;
+  Timer? _sosActivationUiTimeoutTimer;
   // Removed _isSOSActivated - button state now reflects actual SOS session state only
   int _countdownSeconds = AppConstants.sosCountdownSeconds;
 
+  void _cancelSosActivationUiTimeout() {
+    _sosActivationUiTimeoutTimer?.cancel();
+    _sosActivationUiTimeoutTimer = null;
+  }
+
+  void _startSosActivationUiTimeout() {
+    _cancelSosActivationUiTimeout();
+    _sosActivationUiTimeoutTimer = Timer(const Duration(seconds: 35), () {
+      if (!mounted) return;
+      if (_isSOSActive) return;
+      if (!_isSOSActivating) return;
+
+      setState(() {
+        _isSOSActivating = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⏳ SOS activation is taking longer than expected… please wait',
+          ),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    });
+  }
+
   // REDP!NG Help state
   String _selectedHelpCategory = '';
+  String? _lastHelpPingId;
+  String? _lastHelpOwnerId;
+  bool _isClosingHelpRequest = false;
 
   // Simple system status
   bool _allSystemsActive = true;
@@ -80,6 +120,8 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   bool _hasShownReadinessWarning = false;
   bool _isDialogShowing = false;
   bool _callbacksRegistered = false;
+  bool _sosCallbacksRegistered = false;
+  late final DateTime _sosOpenedAt;
   // Monitoring status
   bool _monitoringOn = false;
   String _monitoringMode = '—';
@@ -160,6 +202,8 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
 
+    _sosOpenedAt = DateTime.now();
+
     _heartbeatController = AnimationController(
       duration: Duration(
         milliseconds: AppConstants.heartbeatAnimationDurationMs,
@@ -192,6 +236,107 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     _serviceManager.hazardService.addAlertsUpdatedListener(
       _onHazardAlertsUpdated,
     );
+
+    // Trigger calibration when SOS page is opened (safe & throttled).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _serviceManager.sensorService.triggerCalibrationOnAppOpen();
+    });
+
+    // Register SOS callbacks early so offline/fast activations still update the UI
+    // even if didChangeDependencies initialization is still in progress.
+    _ensureSOSCallbacksRegistered();
+
+    // Cold-start/offline reopen: restore active SOS from local storage.
+    // This will update the UI through the callbacks registered above.
+    unawaited(_serviceManager.sosService.quickRestoreFromLocalIfNeeded());
+
+    // If an SOS session is already active (e.g. after a route rebuild), sync the
+    // visual state immediately so the activation ring stays on.
+    final existingSession = _serviceManager.sosService.currentSession;
+    if (existingSession != null) {
+      _currentSession = existingSession;
+      _isCountdownActive = existingSession.status == SOSStatus.countdown;
+      _isSOSActive =
+          existingSession.status == SOSStatus.active ||
+          existingSession.status == SOSStatus.acknowledged ||
+          existingSession.status == SOSStatus.assigned ||
+          existingSession.status == SOSStatus.enRoute ||
+          existingSession.status == SOSStatus.onScene ||
+          existingSession.status == SOSStatus.inProgress;
+
+      // If countdown started before this page registered callbacks (ACFD while
+      // on a different route), ensure the countdown dialog is still shown.
+      if (_isCountdownActive) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _showSOSCountdownDialog();
+        });
+      }
+    }
+
+    unawaited(_loadLastRedpingHelpRequestFromPrefs());
+  }
+
+  void _ensureSOSCallbacksRegistered() {
+    if (_sosCallbacksRegistered) return;
+    try {
+      _serviceManager.sosService.setSessionStartedCallback(
+        _onSOSSessionStarted,
+      );
+      _serviceManager.sosService.setSessionUpdatedCallback(
+        _onSOSSessionUpdated,
+      );
+      _serviceManager.sosService.setSessionEndedCallback(_onSOSSessionEnded);
+      _serviceManager.sosService.setCountdownTickCallback(_onCountdownTick);
+      _serviceManager.sosService.setVoiceVerificationRequestedCallback(
+        _onVoiceVerificationRequested,
+      );
+      _sosCallbacksRegistered = true;
+    } catch (_) {
+      // Best-effort: if something is still booting, didChangeDependencies will
+      // register again. We still try here so activation UI updates.
+    }
+  }
+
+  Future<void> _scheduleReadinessWarningCheck() async {
+    // Avoid showing the dialog immediately on launch; give users time to see
+    // the main SOS UI and allow services/permissions to settle.
+    const minDelayFromOpen = Duration(seconds: 15);
+
+    await _waitForReadinessInputs();
+    if (!mounted) return;
+
+    final notBefore = _sosOpenedAt.add(minDelayFromOpen);
+    final remaining = notBefore.difference(DateTime.now());
+    if (remaining > Duration.zero) {
+      await Future.delayed(remaining);
+    }
+    if (!mounted) return;
+
+    // Retry for a short window because connectivity/services can briefly report
+    // transitional states right after launch.
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      final didShow = await _checkAndMaybeShowReadinessWarning();
+      if (didShow) return;
+      if (_hasShownReadinessWarning) return;
+      await Future.delayed(const Duration(seconds: 5));
+    }
+  }
+
+  Future<void> _loadLastRedpingHelpRequestFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pingId = prefs.getString('last_redping_help_ping_id');
+      final ownerId = prefs.getString('last_redping_help_owner_id');
+      if (!mounted) return;
+      setState(() {
+        _lastHelpPingId = pingId;
+        _lastHelpOwnerId = ownerId;
+      });
+    } catch (_) {
+      // best-effort only
+    }
   }
 
   /// Handle RedPing Mode changes
@@ -223,17 +368,21 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
         debugPrint('🔄 SOS Page: ✅ SOS session resolved successfully');
 
         // Update local state after successful resolution
+        _cancelSosActivationUiTimeout();
         setState(() {
           _isSOSActive = false;
           _isCountdownActive = false;
+          _isSOSActivating = false;
           _currentSession = null;
         });
       } catch (e) {
         debugPrint('🔄 SOS Page: ❌ Error resolving SOS session: $e');
         // Still update UI even if resolution fails
+        _cancelSosActivationUiTimeout();
         setState(() {
           _isSOSActive = false;
           _isCountdownActive = false;
+          _isSOSActivating = false;
           _currentSession = null;
         });
       }
@@ -252,9 +401,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
               Icon(Icons.check_circle, color: Colors.white),
               SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  '✅ SOS Reset Complete\nSession marked as resolved in SAR dashboard',
-                ),
+                child: Text('✅ SOS Reset Complete\nWill sync when online'),
               ),
             ],
           ),
@@ -341,8 +488,10 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                     children: const [
                       Icon(Icons.build_circle),
                       SizedBox(width: 8),
-                      Text('Developer Flight Simulator',
-                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text(
+                        'Developer Flight Simulator',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -441,6 +590,11 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       _serviceManager.sosService.setSessionEndedCallback(_onSOSSessionEnded);
       _serviceManager.sosService.setCountdownTickCallback(_onCountdownTick);
 
+      // Voice verification dialog request from SOSService (post-activation).
+      _serviceManager.sosService.setVoiceVerificationRequestedCallback(
+        _onVoiceVerificationRequested,
+      );
+
       // Set up settings change callback
       _serviceManager.setSettingsChangedCallback(_refreshSystemStatus);
 
@@ -463,6 +617,13 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 existingSession.status == SOSStatus.inProgress;
             _isCountdownActive = existingSession.status == SOSStatus.countdown;
           });
+
+          if (_isCountdownActive) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _showSOSCountdownDialog();
+            });
+          }
         }
       }
 
@@ -480,9 +641,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       // Check emergency readiness (only show once per page session).
       // IMPORTANT: Service initialization happens in the background after UI start.
       // If we compute readiness too early, it will always look low and spam users.
-      await _waitForReadinessInputs();
-      if (!mounted) return;
-      _checkAndMaybeShowReadinessWarning();
+      unawaited(_scheduleReadinessWarningCheck());
 
       debugPrint('SOS Page: Services connected successfully');
 
@@ -507,31 +666,170 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     }
   }
 
+  void _onVoiceVerificationRequested() {
+    if (!mounted) return;
+    if (_isDialogShowing) return;
+
+    _isDialogShowing = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (_) =>
+            const PopScope(canPop: false, child: VoiceVerificationDialog()),
+      ).whenComplete(() {
+        _isDialogShowing = false;
+      });
+    });
+  }
+
   Future<void> _waitForReadinessInputs() async {
-    final deadline = DateTime.now().add(const Duration(seconds: 8));
+    // Give background initialization a moment to complete so the checklist
+    // reflects real missing actions rather than transient "still loading" states.
+    await Future.delayed(const Duration(milliseconds: 600));
+
+    String readinessMask() {
+      final profileReady = _serviceManager.profileService
+          .isProfileReadyForEmergency();
+      final contactsReady =
+          _serviceManager.contactsService.enabledContacts.isNotEmpty;
+      final locationReady = _serviceManager.locationService.hasPermission;
+      final notificationsReady = _serviceManager.notificationService.isEnabled;
+      final sensorReady =
+          _serviceManager.sensorService.isMonitoring &&
+          _serviceManager.sensorService.crashDetectionEnabled;
+      final calibrationReady = _serviceManager.sensorService.isCalibrated;
+      final sosReady = _serviceManager.sosService.isInitialized;
+
+      // Compact string representation to detect stability across a few polls.
+      return [
+        profileReady,
+        contactsReady,
+        locationReady,
+        notificationsReady,
+        sensorReady,
+        calibrationReady,
+        sosReady,
+      ].map((v) => v ? '1' : '0').join();
+    }
+
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    String? lastMask;
+    var stableSamples = 0;
+
     while (mounted && DateTime.now().isBefore(deadline)) {
-      // AppServiceManager marks itself initialized after essential services are ready.
-      if (_serviceManager.isInitialized &&
+      // Wait for the key services that influence readiness to finish initializing.
+      final coreReady =
+          _serviceManager.isInitialized &&
           _serviceManager.profileService.isInitialized &&
-          _serviceManager.contactsService.isInitialized) {
-        return;
+          _serviceManager.contactsService.isInitialized &&
+          _serviceManager.notificationService.isInitialized &&
+          _serviceManager.sosService.isInitialized;
+
+      if (coreReady) {
+        final mask = readinessMask();
+        if (mask == lastMask) {
+          stableSamples += 1;
+        } else {
+          stableSamples = 0;
+          lastMask = mask;
+        }
+
+        // Require a couple consecutive identical snapshots so we don't pop the
+        // dialog mid-startup while values are still flipping.
+        if (stableSamples >= 2) {
+          return;
+        }
+      } else {
+        stableSamples = 0;
       }
-      await Future.delayed(const Duration(milliseconds: 150));
+
+      await Future.delayed(const Duration(milliseconds: 250));
     }
   }
 
-  void _checkAndMaybeShowReadinessWarning() {
+  Future<bool> _checkAndMaybeShowReadinessWarning() async {
+    if (_hasShownReadinessWarning || _isDialogShowing) return false;
+
+    // Do not auto-show readiness dialogs while offline. Offline mode can make
+    // multiple readiness items look "red" (internet checks, background services,
+    // calibration availability), which confuses users during offline launch.
+    try {
+      final effectivelyOffline =
+          ConnectivityMonitorService().isEffectivelyOffline;
+      if (effectivelyOffline) {
+        return false;
+      }
+    } catch (_) {
+      // Best-effort only
+    }
+
+    // User-controlled suppression (useful for field deployments / demos).
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final suppressed =
+          prefs.getBool('sos_suppress_readiness_warning') ?? false;
+      if (suppressed) {
+        _hasShownReadinessWarning = true;
+        return false;
+      }
+    } catch (_) {
+      // Best-effort only
+    }
+
+    final profileReady = _serviceManager.profileService
+        .isProfileReadyForEmergency();
+    final contactsReady =
+        _serviceManager.contactsService.enabledContacts.isNotEmpty;
+    final locationReady = _serviceManager.locationService.hasPermission;
+    final notificationsReady = _serviceManager.notificationService.isEnabled;
+    final sensorReady =
+        _serviceManager.sensorService.isMonitoring &&
+        _serviceManager.sensorService.crashDetectionEnabled;
+    final calibrationReady = _serviceManager.sensorService.isCalibrated;
+    final sosReady = _serviceManager.sosService.isInitialized;
+
+    final hasAnyMissing =
+        !profileReady ||
+        !contactsReady ||
+        !locationReady ||
+        !notificationsReady ||
+        !sensorReady ||
+        !calibrationReady ||
+        !sosReady;
+
+    // Emergency contacts are a hard requirement: if missing and we're online,
+    // show the dialog (once) regardless of the computed score.
     final readinessScore = _serviceManager.getEmergencyReadinessScore();
-    if (readinessScore < 0.7 && !_hasShownReadinessWarning && !_isDialogShowing) {
+    final items = <bool>[
+      profileReady,
+      contactsReady,
+      locationReady,
+      notificationsReady,
+      sensorReady,
+      calibrationReady,
+      sosReady,
+    ];
+    final checklistScore =
+        items.where((v) => v).length / (items.isEmpty ? 1 : items.length);
+
+    final mustShow =
+        (!contactsReady) || (readinessScore < 0.7 && hasAnyMissing);
+    if (mustShow && !_isDialogShowing) {
       _hasShownReadinessWarning = true;
+      final scoreToShow = (readinessScore < checklistScore)
+          ? readinessScore
+          : checklistScore;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _showReadinessWarning(readinessScore);
+        _showReadinessWarning(scoreToShow);
       });
-    } else if (readinessScore >= 0.7) {
-      _hasShownReadinessWarning = false;
-      _isDialogShowing = false;
+      return true;
     }
+
+    return false;
   }
 
   /// Refresh system status (called when returning from settings)
@@ -677,6 +975,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     _heartbeatController.dispose();
     _beaconController.dispose();
     _statusRefreshTimer?.cancel();
+    _cancelSosActivationUiTimeout();
     _modeService.removeListener(_onModeChanged);
     _serviceManager.hazardService.removeAlertsUpdatedListener(
       _onHazardAlertsUpdated,
@@ -753,17 +1052,26 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       _heartbeatController.stop();
     }
 
+    final isActiveNow =
+        session.status == SOSStatus.active ||
+        session.status == SOSStatus.acknowledged ||
+        session.status == SOSStatus.assigned ||
+        session.status == SOSStatus.enRoute ||
+        session.status == SOSStatus.onScene ||
+        session.status == SOSStatus.inProgress;
+
+    if (isActiveNow) {
+      _cancelSosActivationUiTimeout();
+    }
+
     setState(() {
       _currentSession = session;
       _isCountdownActive = session.status == SOSStatus.countdown;
       // Keep SOS active for all active-related statuses
-      _isSOSActive =
-          session.status == SOSStatus.active ||
-          session.status == SOSStatus.acknowledged ||
-          session.status == SOSStatus.assigned ||
-          session.status == SOSStatus.enRoute ||
-          session.status == SOSStatus.onScene ||
-          session.status == SOSStatus.inProgress;
+      _isSOSActive = isActiveNow;
+      if (isActiveNow) {
+        _isSOSActivating = false;
+      }
       _countdownSeconds = AppConstants.sosCountdownSeconds;
     });
     _countdownNotifier.value = AppConstants.sosCountdownSeconds;
@@ -800,17 +1108,27 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
     debugPrint('🔄 SOS Page: Session updated - Status: ${session.status}');
 
+    final isActiveNow =
+        session.status == SOSStatus.active ||
+        session.status == SOSStatus.acknowledged ||
+        session.status == SOSStatus.assigned ||
+        session.status == SOSStatus.enRoute ||
+        session.status == SOSStatus.onScene ||
+        session.status == SOSStatus.inProgress;
+
+    if (isActiveNow) {
+      _cancelSosActivationUiTimeout();
+    }
+
     setState(() {
       _currentSession = session;
       // Keep SOS active for all active-related statuses (acknowledged, assigned, enRoute, onScene, inProgress)
-      _isSOSActive =
-          session.status == SOSStatus.active ||
-          session.status == SOSStatus.acknowledged ||
-          session.status == SOSStatus.assigned ||
-          session.status == SOSStatus.enRoute ||
-          session.status == SOSStatus.onScene ||
-          session.status == SOSStatus.inProgress;
+      _isSOSActive = isActiveNow;
       _isCountdownActive = session.status == SOSStatus.countdown;
+
+      if (isActiveNow) {
+        _isSOSActivating = false;
+      }
 
       debugPrint(
         '🔄 SOS Page: _isSOSActive = $_isSOSActive, _currentSession != null: ${_currentSession != null}',
@@ -847,8 +1165,11 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       _currentSession = null;
       _isSOSActive = false;
       _isCountdownActive = false;
+      _isSOSActivating = false;
       _countdownSeconds = AppConstants.sosCountdownSeconds;
     });
+
+    _cancelSosActivationUiTimeout();
 
     // Close any open dialogs safely after the current frame; avoid popping the last page
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -883,8 +1204,54 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   void _onSOSActivated() async {
     // Called after 10-second press - activate real SOS
     try {
+      debugPrint('SOSPage: _onSOSActivated() start');
+      _ensureSOSCallbacksRegistered();
+
+      if (mounted) {
+        setState(() {
+          _isSOSActivating = true;
+        });
+      }
+      _startSosActivationUiTimeout();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⏳ Activating SOS… please wait'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 6),
+          ),
+        );
+      }
+
       // Emergency SOS with phone map integration
       await _sendEmergencySOS();
+
+      debugPrint('SOSPage: _onSOSActivated() after _sendEmergencySOS()');
+
+      // Defensive UI sync: if callbacks were missed for any reason, pull the
+      // active session from the service so the green ring updates immediately.
+      try {
+        final session = _serviceManager.sosService.currentSession;
+        if (mounted && session != null) {
+          setState(() {
+            _currentSession = session;
+            _isCountdownActive = session.status == SOSStatus.countdown;
+            _isSOSActive =
+                session.status == SOSStatus.active ||
+                session.status == SOSStatus.acknowledged ||
+                session.status == SOSStatus.assigned ||
+                session.status == SOSStatus.enRoute ||
+                session.status == SOSStatus.onScene ||
+                session.status == SOSStatus.inProgress;
+            if (_isSOSActive) {
+              _isSOSActivating = false;
+              _cancelSosActivationUiTimeout();
+            }
+          });
+        }
+      } catch (_) {}
 
       HapticFeedback.heavyImpact();
 
@@ -902,46 +1269,59 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
         );
 
         // If offline, show a clear banner indicating queued delivery + SMS fallback
-        try {
-          final isOffline = ConnectivityMonitorService().isOffline;
-          if (isOffline) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  '📴 Offline Mode: SOS queued. SMS fallback available.',
-                ),
-                backgroundColor: Colors.orange,
-                behavior: SnackBarBehavior.floating,
-                duration: Duration(seconds: 4),
-              ),
+        unawaited(() async {
+          try {
+            final results = await Connectivity().checkConnectivity();
+            final hasInterfaces = results.any(
+              (r) => r != ConnectivityResult.none,
             );
+            final reachable =
+                hasInterfaces &&
+                await ConnectivityMonitorService().isInternetReachable(
+                  timeout: const Duration(seconds: 2),
+                );
+            final effectivelyOffline = !reachable;
+            if (effectivelyOffline && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    '📴 Offline Mode: SOS queued. SMS fallback available.',
+                  ),
+                  backgroundColor: Colors.orange,
+                  behavior: SnackBarBehavior.floating,
+                  duration: Duration(seconds: 4),
+                ),
+              );
+            }
+          } catch (_) {
+            // Best-effort banner; ignore any connectivity lookup issues
           }
-        } catch (_) {
-          // Best-effort banner; ignore any connectivity lookup issues
-        }
+        }());
       }
     } catch (e) {
       debugPrint('Error activating SOS: $e');
       _showErrorDialog('Failed to activate SOS: ${e.toString()}');
+
+      _cancelSosActivationUiTimeout();
+      if (mounted) {
+        setState(() {
+          _isSOSActivating = false;
+        });
+      }
     }
   }
 
   /// Emergency SOS with full SAR system integration
   Future<void> _sendEmergencySOS() async {
     try {
-      // 1. Get current location (offline-friendly)
-      // Use service-based fetch which falls back to cached values and returns null on failure,
-      // avoiding a hard 10s TimeoutException that blocks SOS activation in airplane mode.
-      final locInfo = await _serviceManager.locationService.getCurrentLocation(
-        highAccuracy: true,
-        forceFresh: false,
-      );
-
-      // 2. Activate FULL SOS Service with SAR coordination
+      // 1. Activate FULL SOS Service with SAR coordination
       // The 10-second button hold served as the countdown, so activate immediately
       await _serviceManager.sosService.activateSOSImmediately(
         type: SOSType.manual,
         userMessage: 'Emergency SOS - Full SAR coordination activated',
+        // We're already on the SOS UI; avoid route changes that can trigger
+        // rebuilds and temporarily drop the activation visuals.
+        bringToSOSPage: false,
       );
 
       debugPrint(
@@ -956,10 +1336,22 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       //    - Sends satellite emergency alert if available
       //    - Tracks rescue responses
 
-      // 4. Send additional Firebase alert for redundancy (online-only)
+      // 2. Get current location (best-effort, non-blocking for activation)
+      // If LocationService is still initializing, do not block SOS activation.
+      LocationInfo? locInfo;
       try {
-        final offline = ConnectivityMonitorService().isOffline;
-        if (!offline && locInfo != null) {
+        locInfo = await _serviceManager.locationService
+            .getCurrentLocation(highAccuracy: true, forceFresh: false)
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {
+        locInfo = null;
+      }
+
+      // 3. Send additional Firebase alert for redundancy (online-only)
+      try {
+        final reachable = await ConnectivityMonitorService()
+            .isInternetReachable(timeout: const Duration(seconds: 2));
+        if (reachable && locInfo != null) {
           final firebaseService = _serviceManager.firebaseService;
           final userId = firebaseService.currentUser?.uid ?? 'anonymous';
           final sosSession = SOSSession(
@@ -1017,378 +1409,331 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     debugPrint(
       'SOSPage: 🚨 SHOWING COUNTDOWN DIALOG - $_countdownSeconds seconds',
     );
-    // LAB: Suppress countdown dialog during testing
     if (AppConstants.labSuppressAllSOSDialogs ||
         AppConstants.labSuppressCountdownDialog) {
       debugPrint('SOSPage: [LAB] Suppressing countdown dialog');
       return;
     }
     if (_isDialogShowing) {
-      debugPrint(
-        'SOSPage: Countdown dialog already showing; skipping duplicate',
-      );
+      debugPrint('SOSPage: Countdown dialog already showing; skipping');
       return;
     }
+
     _isDialogShowing = true;
-    // Schedule on next frame to avoid context/routing races
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      showDialog(
+
+      bool enableVoice = true;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        enableVoice = prefs.getBool('voice_verification_enabled') ?? true;
+      } catch (_) {}
+
+      if (!mounted) return;
+
+      await showDialog<void>(
         context: context,
         barrierDismissible: false,
         useRootNavigator: true,
         builder: (dialogContext) => PopScope(
           canPop: false,
           onPopInvokedWithResult: (didPop, result) {
-            // Should not happen because barrierDismissible=false, but keep state safe
             if (didPop) _isDialogShowing = false;
           },
-          child: StatefulBuilder(
-            builder: (context, setLocalState) {
-              return AlertDialog(
-                backgroundColor: AppTheme.warningOrange,
-                title: const Text(
-                  '⚠️ CRASH DETECTED',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20,
-                  ),
+          child: SosCountdownDialog(
+            countdown: _countdownNotifier,
+            enableVoiceCancel: enableVoice,
+            onCancel: () {
+              _serviceManager.sosService.cancelSOS();
+              _isDialogShowing = false;
+            },
+            onDistressActivate: (heard) {
+              unawaited(
+                _serviceManager.sosService.activateCountdownNow(
+                  reason: 'voice_distress_detected',
+                  transcription: heard,
                 ),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.car_crash, size: 64, color: Colors.white),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Are you okay?',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    ValueListenableBuilder<int>(
-                      valueListenable: _countdownNotifier,
-                      builder: (context, value, _) => Text(
-                        'SOS will activate in $value seconds',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    ValueListenableBuilder<int>(
-                      valueListenable: _countdownNotifier,
-                      builder: (context, value, _) => Text(
-                        '$value',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 48,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                actions: [
-                  ElevatedButton(
-                    onPressed: () {
-                      _serviceManager.sosService.cancelSOS();
-                      _isDialogShowing = false;
-                      Navigator.of(dialogContext).pop();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.safeGreen,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                    ),
-                    child: const Text(
-                      'I\'M OK - CANCEL',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
               );
+              _isDialogShowing = false;
             },
           ),
         ),
-      );
+      ).whenComplete(() {
+        _isDialogShowing = false;
+      });
     });
   }
 
-  // Legacy SOS Active dialog removed; using inline action strip instead.
-
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: !(_isSOSActive || _isCountdownActive),
-      onPopInvokedWithResult: (bool didPop, dynamic result) {
-        // Keep SOS page pinned while countdown or active
-        if (!didPop && (_isSOSActive || _isCountdownActive)) {
-          // Pop was prevented, do nothing
-        }
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Row(
-            children: [
-              Expanded(child: _buildStylizedTitle()),
-              if (_isSOSActive || _isCountdownActive) ...[
-                const SizedBox(width: 8),
-                // Ensure the status chip never overflows the app bar width
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _isSOSActive
-                          ? AppTheme.primaryRed
-                          : AppTheme.warningOrange,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _isSOSActive ? 'SOS ACTIVE' : 'COUNTDOWN',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
+    final showStatus = _isSOSActive || _isCountdownActive;
+
+    return Scaffold(
+      backgroundColor: AppTheme.darkSurface,
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Expanded(child: _buildStylizedTitle()),
+            if (showStatus) ...[
+              const SizedBox(width: 8),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _isSOSActive
+                        ? AppTheme.primaryRed
+                        : AppTheme.warningOrange,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _isSOSActive ? 'SOS ACTIVE' : 'COUNTDOWN',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
-              ],
+              ),
             ],
-          ),
-          backgroundColor: _isSOSActive || _isCountdownActive
-              ? (_isSOSActive ? AppTheme.primaryRed : AppTheme.warningOrange)
-                    .withValues(alpha: 0.1)
-              : null,
-          actions: [
-            IconButton(
-              tooltip: 'Emergency Hotline (Manual Dial)',
-              icon: const Icon(Icons.local_phone, color: AppTheme.criticalRed),
-              onPressed: _showEmergencyHotlineSheet,
-            ),
-            if (kDebugMode)
-              IconButton(
-                tooltip: 'Dev: Simulate Flight',
-                icon: const Icon(Icons.flight_takeoff),
-                onPressed: _openDevFlightSimulator,
-              ),
-            if (_isSOSActive || _isCountdownActive)
-              IconButton(
-                icon: const Icon(Icons.cancel, color: AppTheme.primaryRed),
-                onPressed: () => _serviceManager.sosService.cancelSOS(),
-                tooltip: 'Cancel SOS',
-              ),
-            // Removed: App bar test icon (moved to a dedicated test card below)
-            const AuthStatusWidget(),
-            GestureDetector(
-              onLongPress: () async {
-                try {
-                  final ok = await _serviceManager.googleCloudApiService
-                      .protectedPing();
-                  if (!mounted) return;
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        ok
-                            ? 'Protected ping: success (HMAC + Integrity OK)'
-                            : 'Protected ping: failed (see logs)',
-                      ),
-                      backgroundColor: ok ? Colors.green : Colors.red,
-                      duration: const Duration(seconds: 3),
-                    ),
-                  );
-                } catch (e) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Protected ping error: $e'),
-                      backgroundColor: Colors.red,
-                      duration: const Duration(seconds: 3),
-                    ),
-                  );
-                }
-              },
-              child: IconButton(
-                icon: const Icon(Icons.settings),
-                onPressed: () => context.go(AppRouter.settings),
-              ),
-            ),
           ],
         ),
-        body: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                padding: const EdgeInsets.all(AppConstants.defaultPadding),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minHeight:
-                        constraints.maxHeight - AppConstants.defaultPadding * 2,
-                  ),
-                  child: IntrinsicHeight(
-                    child: Column(
-                      children: [
-                        // SOS Active Banner (if active)
-                        if (_isSOSActive || _isCountdownActive)
-                          _buildSOSActiveBanner(),
-
-                        if (kDebugMode) _buildRedPingModeDebugCard(),
-
-                        // User Identification Card (if SOS is active)
-                        if (_isSOSActive)
-                          UserIdentificationCard(
-                            userProfile:
-                                _serviceManager.profileService.currentProfile,
-                          ),
-
-                        // SOS Status Tracker (if SOS is active)
-                        if (_isSOSActive && _currentSession != null)
-                          SOSStatusTracker(session: _currentSession!),
-
-                        // SAR Coordination Status removed from homepage
-                        // (Previously showed _buildSARCoordinationCard())
-
-                        // Rescue team and emergency contact responses
-                        if (_currentSession != null)
-                          RescueResponseWidget(session: _currentSession!),
-
-                        // Emergency messaging (removed per request)
-                        // if (_currentSession != null && _isSOSActive)
-                        //   _buildEmergencyMessagingCard(),
-
-                        // Status indicators
-
-                        // Simple system status
-                        _buildSimpleSystemStatus(),
-
-                        const SizedBox(height: 16),
-
-                        // Compact SOS Active action strip above RedPing button
-                        if (_isSOSActive) _buildSOSActiveActionStrip(),
-
-                        // Main SOS button - flexible height
-                        Flexible(
-                          flex: 3,
-                          child: Container(
-                            constraints: const BoxConstraints(minHeight: 200),
-                            child: Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  if (_isCountdownActive) ...[
-                                    Text(
-                                      'SOS in $_countdownSeconds',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineMedium
-                                          ?.copyWith(
-                                            color: AppTheme.primaryRed,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Text(
-                                      'Release to cancel',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            color: AppTheme.secondaryText,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 24),
-                                  ],
-
-                                  // Dual Button System
-                                  _buildDualButtonSystem(),
-
-                                  const SizedBox(height: 24),
-
-                                  // Quick Actions (Call, Medical, Message)
-                                  _buildQuickActionsRow(),
-
-                                  const SizedBox(height: 16),
-
-                                  // RedPing Mode Card
-                                  _buildRedPingModeCard(),
-
-                                  const SizedBox(height: 16),
-
-                                  // Active Mode Dashboard
-                                  const ActiveModeDashboard(),
-
-                                  if (!_isSOSActive && !_isCountdownActive)
-                                    ...[],
-
-                                  if (_isSOSActive) ...[
-                                    const Icon(
-                                      Icons.radio_button_checked,
-                                      color: AppTheme.primaryRed,
-                                      size: 24,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'SOS ACTIVE',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyLarge
-                                          ?.copyWith(
-                                            color: AppTheme.primaryRed,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-
-                        const SizedBox(height: 20),
-
-                        // SAR Quick Access removed from homepage
-
-                        // Hazard Alerts Quick Access
-                        _buildHazardAlertsQuickAccess(),
-
-                        const SizedBox(height: 16),
-
-                        // (Removed) Developer test cards for voice/WebRTC calls
-
-                        // Removed duplicate Help section (HelpAssistantCard) to avoid redundancy with RedPing button
-
-                        // Gadgets Management
-                        const GadgetsManagementCard(),
-
-                        const SizedBox(height: 16),
-
-                        // Volunteer Rescue Quick Access removed from homepage
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
+        backgroundColor: AppTheme.darkSurface,
+        actions: [
+          IconButton(
+            tooltip: 'Profile',
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: () => context.go(AppRouter.profile),
+          ),
+          IconButton(
+            tooltip: 'Emergency Hotline (Manual Dial)',
+            icon: const Icon(Icons.local_phone, color: AppTheme.criticalRed),
+            onPressed: () => unawaited(_showEmergencyHotlineSheet()),
+          ),
+          if (showStatus)
+            IconButton(
+              icon: const Icon(Icons.cancel, color: AppTheme.primaryRed),
+              onPressed: () => _serviceManager.sosService.cancelSOS(),
+              tooltip: 'Cancel SOS',
+            ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => context.go(AppRouter.settings),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(AppConstants.defaultPadding),
+          child: Column(
+            children: [
+              if (showStatus) _buildSOSActiveBanner(),
+              if (kDebugMode) _buildRedPingModeDebugCard(),
+              _buildActiveRedpingHelpRequestBanner(),
+              SensorCalibrationStatusBanner(
+                sensorService: _serviceManager.sensorService,
+              ),
+              _buildSimpleSystemStatus(),
+              const SizedBox(height: 16),
+              if (_isSOSActive) _buildSOSActiveActionStrip(),
+              _buildDualButtonSystem(),
+              const SizedBox(height: 24),
+              _buildQuickActionsRow(),
+              const SizedBox(height: 16),
+              _buildRedPingModeCard(),
+              const SizedBox(height: 16),
+              const ActiveModeDashboard(),
+              const SizedBox(height: 20),
+              _buildHazardAlertsQuickAccess(),
+              const SizedBox(height: 16),
+              const GadgetsManagementCard(),
+              const SizedBox(height: 16),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  bool _isTerminalHelpStatus(SOSPingStatus status) {
+    switch (status) {
+      case SOSPingStatus.resolved:
+      case SOSPingStatus.cancelled:
+      case SOSPingStatus.expired:
+        return true;
+      case SOSPingStatus.active:
+      case SOSPingStatus.assigned:
+      case SOSPingStatus.inProgress:
+        return false;
+    }
+  }
+
+  Widget _buildActiveRedpingHelpRequestBanner() {
+    final pingId = _lastHelpPingId;
+    if (pingId == null || pingId.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final ping = _serviceManager.sosPingService.getPingById(pingId);
+    if (ping != null && _isTerminalHelpStatus(ping.status)) {
+      return const SizedBox.shrink();
+    }
+
+    final helpCategory = (ping?.metadata['helpCategory'] ?? '').toString();
+    final labelCategory = helpCategory.isNotEmpty
+        ? helpCategory.replaceAll('_', ' ')
+        : 'help request';
+
+    final authUserId = AuthService.instance.currentUser.id;
+    final firebaseUid =
+        firebase_auth.FirebaseAuth.instance.currentUser?.uid ?? '';
+    final profileUserId =
+        _serviceManager.profileService.currentProfile?.id ?? '';
+    final effectiveUserId = firebaseUid.isNotEmpty
+        ? firebaseUid
+        : (authUserId.isNotEmpty
+              ? authUserId
+              : (profileUserId.isNotEmpty
+                    ? profileUserId
+                    : (_lastHelpOwnerId ?? '')));
+
+    final isOwner =
+        ping != null &&
+        effectiveUserId.isNotEmpty &&
+        ping.userId == effectiveUserId;
+
+    Future<void> closeIfAllowed(SOSPing ping) async {
+      if (!isOwner) return;
+      if (_isClosingHelpRequest) return;
+
+      setState(() => _isClosingHelpRequest = true);
+      try {
+        await _serviceManager.sosPingService.closeHelpRequest(pingId: ping.id);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Help request closed'),
+            backgroundColor: AppTheme.successGreen,
+          ),
+        );
+        setState(() {});
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Failed to close help request: $e'),
+            backgroundColor: AppTheme.criticalRed,
+          ),
+        );
+      } finally {
+        if (mounted) setState(() => _isClosingHelpRequest = false);
+      }
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.warningOrange.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.warningOrange.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.report_problem_outlined,
+                color: AppTheme.warningOrange,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Active REDP!NG Help Request',
+                  style: TextStyle(
+                    color: AppTheme.primaryText,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              if (ping != null)
+                Text(
+                  ping.status.name,
+                  style: const TextStyle(
+                    color: AppTheme.secondaryText,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'You have an active $labelCategory request. Please take action or close it when resolved.',
+            style: const TextStyle(
+              color: AppTheme.secondaryText,
+              height: 1.25,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    final route = Uri(
+                      path: AppRouter.redpingHelpStatus,
+                      queryParameters: {'pingId': pingId},
+                    ).toString();
+                    context.go(route);
+                  },
+                  icon: const Icon(Icons.visibility_outlined, size: 18),
+                  label: const Text('View Status'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (isOwner && !_isClosingHelpRequest)
+                      ? () => closeIfAllowed(ping)
+                      : null,
+                  icon: _isClosingHelpRequest
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.check_circle_outline, size: 18),
+                  label: Text(_isClosingHelpRequest ? 'Closing…' : 'Close'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.warningOrange,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (!isOwner) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Only the request owner can close it.',
+              style: TextStyle(color: AppTheme.secondaryText, fontSize: 11),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1500,7 +1845,9 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
               children: [
                 Text('Mode id: ${activeMode?.id ?? '—'}'),
                 Text('Overrides: ${hasOverrides ? 'ON' : 'OFF'}'),
-                Text('Power: ${isLowPower ? 'LOW POWER' : 'ACTIVE'} (override: ${powerModeOverride ?? '—'})'),
+                Text(
+                  'Power: ${isLowPower ? 'LOW POWER' : 'ACTIVE'} (override: ${powerModeOverride ?? '—'})',
+                ),
                 Text('Sampling override: ${samplingOverrideMs ?? '—'} ms'),
                 Text(
                   'Crash threshold: ${crashThreshold?.toStringAsFixed(1) ?? '—'} m/s²',
@@ -1619,7 +1966,48 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
   }
 
   void _showReadinessWarning(double score) {
+    if (AppConstants.labSuppressAllSOSDialogs ||
+        AppConstants.labSuppressVerificationDialog) {
+      return;
+    }
+
     final percentage = (score * 100).toInt();
+
+    Widget readinessItem(IconData icon, String text) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: AppTheme.criticalRed),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text)),
+        ],
+      );
+    }
+
+    final profileReady = _serviceManager.profileService
+        .isProfileReadyForEmergency();
+    final contactsReady =
+        _serviceManager.contactsService.enabledContacts.isNotEmpty;
+    final locationReady = _serviceManager.locationService.hasPermission;
+    final notificationsReady = _serviceManager.notificationService.isEnabled;
+    final sensorReady =
+        _serviceManager.sensorService.isMonitoring &&
+        _serviceManager.sensorService.crashDetectionEnabled;
+    final calibrationReady = _serviceManager.sensorService.isCalibrated;
+    final sosReady = _serviceManager.sosService.isInitialized;
+
+    final hasAnyMissing =
+        !profileReady ||
+        !contactsReady ||
+        !locationReady ||
+        !notificationsReady ||
+        !sensorReady ||
+        !calibrationReady ||
+        !sosReady;
+
+    // Avoid showing a confusing dialog if readiness is low due to transient
+    // initialization quirks but none of the checklist items are actually missing.
+    if (!hasAnyMissing) return;
 
     if (_isDialogShowing) {
       debugPrint('SOS Page: Readiness dialog already showing, skipping.');
@@ -1642,57 +2030,78 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
           }
         },
         child: AlertDialog(
-          title: const Row(
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.warning, color: AppTheme.warningOrange),
-              SizedBox(width: 8),
-              Text('Setup Incomplete'),
+              const Icon(Icons.warning, color: AppTheme.warningOrange),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Setup Incomplete',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Your emergency readiness is $percentage%. For optimal safety, please complete:',
-                style: const TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 12),
-              if (!_serviceManager.profileService
-                  .isProfileReadyForEmergency()) ...[
-                const Row(
-                  children: [
-                    Icon(Icons.person, size: 16, color: AppTheme.criticalRed),
-                    SizedBox(width: 8),
-                    Text('Complete your profile information'),
-                  ],
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (_serviceManager.contactsService.enabledContacts.isEmpty) ...[
-                const Row(
-                  children: [
-                    Icon(Icons.contacts, size: 16, color: AppTheme.criticalRed),
-                    SizedBox(width: 8),
-                    Text('Add emergency contacts'),
-                  ],
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (!_serviceManager.locationService.hasPermission) ...[
-                const Row(
-                  children: [
-                    Icon(
-                      Icons.location_off,
-                      size: 16,
-                      color: AppTheme.criticalRed,
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              // Prevent tiny overflows on small devices by allowing the dialog
+              // body to scroll instead of forcing a fixed-height Column.
+              maxHeight: MediaQuery.of(context).size.height * 0.55,
+            ),
+            child: SingleChildScrollView(
+              child: ListBody(
+                children: [
+                  Text(
+                    'Your emergency readiness is $percentage%. For optimal safety, please complete:',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 12),
+                  if (!profileReady) ...[
+                    readinessItem(
+                      Icons.person,
+                      'Complete your profile information',
                     ),
-                    SizedBox(width: 8),
-                    Text('Enable location permissions'),
+                    const SizedBox(height: 8),
                   ],
-                ),
-              ],
-            ],
+                  if (!contactsReady) ...[
+                    readinessItem(Icons.contacts, 'Add emergency contacts'),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!locationReady) ...[
+                    readinessItem(
+                      Icons.location_off,
+                      'Enable location permissions',
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!notificationsReady) ...[
+                    readinessItem(
+                      Icons.notifications_off,
+                      'Enable notifications',
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!sensorReady) ...[
+                    readinessItem(
+                      Icons.sensors_off,
+                      'Enable safety sensors (Driving Mode)',
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!calibrationReady) ...[
+                    readinessItem(Icons.tune, 'Complete sensor calibration'),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!sosReady) ...[
+                    readinessItem(
+                      Icons.warning_amber_rounded,
+                      'Wait for SOS services to finish loading',
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
           actions: [
             TextButton(
@@ -1719,11 +2128,11 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
                 // Guide user through the two most common missing readiness items.
                 // 1) Emergency contacts
-                // 2) Medical profile (medical card)
+                // 2) Profile medical info (within Profile page)
                 final router = GoRouter.of(context);
                 await router.push('/profile/emergency-contacts');
                 if (!mounted) return;
-                await router.push('/doctor/profile');
+                await router.push('/profile');
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.primaryRed,
@@ -2034,22 +2443,40 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     IconData statusIcon = Icons.radar;
 
     if (_currentSession != null) {
+      final meta = _currentSession!.metadata;
+      final ackByName = meta['acknowledgedByName'] as String?;
+      final ackByOrg = meta['acknowledgedByOrg'] as String?;
+      final responderName = meta['responderName'] as String?;
+      final responderOrg = meta['responderOrgName'] as String?;
+      final responderTeam = meta['responderTeamName'] as String?;
+
+      String joinParts(List<String?> parts) {
+        final cleaned = parts
+            .where((p) => p != null && p.trim().isNotEmpty)
+            .map((p) => p!.trim())
+            .toList();
+        return cleaned.join(' • ');
+      }
+
       // Check raw status from Firebase first (for SAR workflow status)
       final rawStatus = _currentSession!.metadata['rawStatus'] as String?;
       if (rawStatus != null) {
         switch (rawStatus.toLowerCase()) {
           case 'acknowledged':
             statusText = 'SAR Reviewing';
-            statusDescription = 'Emergency acknowledged by SAR';
+            final who = joinParts([ackByName, ackByOrg]);
+            statusDescription = who.isNotEmpty
+                ? 'Acknowledged by $who'
+                : 'Emergency acknowledged by SAR';
             statusColor = AppTheme.warningOrange;
             statusIcon = Icons.assignment_turned_in;
             break;
           case 'assigned':
           case 'responder_assigned':
             statusText = 'Team Assigned';
-            statusDescription =
-                _currentSession!.metadata['responderName'] != null
-                ? 'SAR: ${_currentSession!.metadata['responderName']}'
+            final who = joinParts([responderName, responderTeam, responderOrg]);
+            statusDescription = who.isNotEmpty
+                ? 'SAR: $who'
                 : 'Rescue team assigned';
             statusColor = AppTheme.infoBlue;
             statusIcon = Icons.support_agent;
@@ -2244,97 +2671,100 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
             ),
             const SizedBox(height: 10),
             // Offline/Queued inline indicator
-            Builder(builder: (context) {
-              try {
-                final offline = ConnectivityMonitorService().isOffline;
-                final queued = OfflineSOSQueueService().queueCount;
-                if (offline || queued > 0) {
-                  final text = offline
-                      ? (queued > 1
-                          ? 'Offline mode: queued ($queued); SMS available'
-                          : 'Offline mode: queued; SMS available')
-                      : (queued > 1
-                          ? 'Queued for delivery ($queued)'
-                          : 'Queued for delivery');
-                  return Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: Colors.orange.withValues(alpha: 0.3),
+            Builder(
+              builder: (context) {
+                try {
+                  final offline = ConnectivityMonitorService().isOffline;
+                  final queued = OfflineSOSQueueService().queueCount;
+                  if (offline || queued > 0) {
+                    final text = offline
+                        ? (queued > 1
+                              ? 'Offline mode: queued ($queued); SMS available'
+                              : 'Offline mode: queued; SMS available')
+                        : (queued > 1
+                              ? 'Queued for delivery ($queued)'
+                              : 'Queued for delivery');
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
                       ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          offline ? Icons.wifi_off : Icons.outgoing_mail,
-                          color: Colors.orange,
-                          size: 18,
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: Colors.orange.withValues(alpha: 0.3),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            text,
-                            style: const TextStyle(
-                              color: Colors.orange,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Optional quick action: open SMS composer
-                        TextButton.icon(
-                          onPressed: _currentSession == null
-                              ? null
-                              : () async {
-                                  try {
-                                    await EmergencyContactsService()
-                                        .openSMSComposerForEnabledContacts(
-                                      _currentSession!,
-                                    );
-                                  } catch (_) {}
-                                },
-                          icon: const Icon(
-                            Icons.sms,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            offline ? Icons.wifi_off : Icons.outgoing_mail,
                             color: Colors.orange,
                             size: 18,
                           ),
-                          label: const Text(
-                            'SMS Now',
-                            style: TextStyle(
-                              color: Colors.orange,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            backgroundColor:
-                                Colors.orange.withValues(alpha: 0.08),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              side: BorderSide(
-                                color: Colors.orange.withValues(alpha: 0.3),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              text,
+                              style: const TextStyle(
+                                color: Colors.orange,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-              } catch (_) {}
-              return const SizedBox.shrink();
-            }),
+                          const SizedBox(width: 8),
+                          // Optional quick action: open SMS composer
+                          TextButton.icon(
+                            onPressed: _currentSession == null
+                                ? null
+                                : () async {
+                                    try {
+                                      await EmergencyContactsService()
+                                          .openSMSComposerForEnabledContacts(
+                                            _currentSession!,
+                                          );
+                                    } catch (_) {}
+                                  },
+                            icon: const Icon(
+                              Icons.sms,
+                              color: Colors.orange,
+                              size: 18,
+                            ),
+                            label: const Text(
+                              'SMS Now',
+                              style: TextStyle(
+                                color: Colors.orange,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              backgroundColor: Colors.orange.withValues(
+                                alpha: 0.08,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                side: BorderSide(
+                                  color: Colors.orange.withValues(alpha: 0.3),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                } catch (_) {}
+                return const SizedBox.shrink();
+              },
+            ),
             const SizedBox(height: 12),
             const Divider(color: Colors.white24, height: 1),
             const SizedBox(height: 12),
@@ -3027,16 +3457,34 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
               children: [
                 RedPingLogoButton(
                   onPressed: _onREDPINGHelpPressed,
-                  enableHeartbeat: !_isSOSActive && !_isCountdownActive,
+                  enableHeartbeat:
+                      !_isSOSActive && !_isSOSActivating && !_isCountdownActive,
                   size: 160.0,
+                  // Re-instate the classic fadeaway effect (logo fades out/in,
+                  // briefly revealing SOS text in the center) when idle.
+                  enableDisappearEffect: true,
                   // When SOS active: hold 5s to reset
                   // When SOS inactive: hold 5s to activate
-                  onHoldToActivate: _isSOSActive
-                      ? _onSOSReset
-                      : _onSOSActivated,
+                  onHoldToActivate: _isSOSActivating
+                      ? null
+                      : (_isSOSActive ? _onSOSReset : _onSOSActivated),
                   holdSeconds: 5,
                   // Turn green when SOS session is actually active
-                  isSosActivated: _isSOSActive,
+                  isSosActivated: _isSOSActive || _isSOSActivating,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _isSOSActive
+                      ? 'Tap to open RedPing quick services\nHold 5s to reset SOS'
+                      : _isSOSActivating
+                      ? 'Activating SOS… please wait'
+                      : 'Tap to open RedPing quick services\nHold 5s to activate SOS',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.primaryText,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 12),
                 // Real-time sensor data with GPS speed callback
@@ -3091,18 +3539,6 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                 ],
                 const SizedBox(height: 10),
                 const _SosDeliveryStatusStrip(),
-                const SizedBox(height: 12),
-                Text(
-                  _isSOSActive
-                      ? 'Tap to open RedPing quick services\nHold 5s to reset SOS'
-                      : 'Tap to open RedPing quick services\nHold 5s to activate SOS',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.primaryText,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
               ],
             ),
           ),
@@ -3152,7 +3588,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
 
   // Removed _showREDPINGCountdownDialog and references to _REDPINGCountdownDialog
 
-  Future<void> _sendREDPINGPing() async {
+  Future<void> _sendREDPINGPing({String? userMessageOverride}) async {
     try {
       // Show loading indicator
       if (mounted) {
@@ -3188,7 +3624,9 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       final pingId = await _serviceManager.messagingIntegrationService
           .createREDPINGHelpRequest(
             helpCategory: _selectedHelpCategory,
-            userMessage: 'REDP!NG Help request for $_selectedHelpCategory',
+            userMessage:
+                userMessageOverride ??
+                'REDP!NG Help request for $_selectedHelpCategory',
           )
           .timeout(
             const Duration(seconds: 30),
@@ -3201,6 +3639,31 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
         'REDP!NG: Help request sent for service: $_selectedHelpCategory (ID: $pingId)',
       );
 
+      // Persist last help request so Help Status page can determine ownership
+      // even when auth is not available (offline / no-login flows).
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('last_redping_help_ping_id', pingId);
+        final firebaseUid =
+            firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+        final ownerId =
+            firebaseUid ??
+            _serviceManager.profileService.currentProfile?.id ??
+            AuthService.instance.currentUser.id;
+        if (ownerId.isNotEmpty) {
+          await prefs.setString('last_redping_help_owner_id', ownerId);
+        }
+
+        if (mounted) {
+          setState(() {
+            _lastHelpPingId = pingId;
+            _lastHelpOwnerId = ownerId;
+          });
+        }
+      } catch (_) {
+        // best-effort only
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -3208,11 +3671,15 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
             backgroundColor: AppTheme.successGreen,
             duration: const Duration(seconds: 3),
             action: SnackBarAction(
-              label: 'View SAR',
+              label: 'View Help Status',
               textColor: Colors.white,
               onPressed: () {
                 if (!mounted) return;
-                context.go(AppRouter.sosPingDashboard);
+                final route = Uri(
+                  path: AppRouter.redpingHelpStatus,
+                  queryParameters: {'pingId': pingId},
+                ).toString();
+                context.go(route);
               },
             ),
           ),
@@ -3253,12 +3720,12 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (context) {
+      builder: (sheetContext) {
         return SafeArea(
           child: SingleChildScrollView(
             padding: EdgeInsets.only(
               // Ensure content is above system insets/keyboard if shown
-              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+              bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -3297,26 +3764,52 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                         label: 'Police',
                         icon: Icons.local_police,
                         color: AppTheme.criticalRed,
-                        onTap: () => _quickSendHelp('police_emergency'),
+                        onTap: () =>
+                            _quickSendHelp(sheetContext, 'police_emergency'),
                       ),
                       _quickServiceButton(
                         label: 'Ambulance',
                         icon: Icons.medical_services,
                         color: AppTheme.infoBlue,
-                        onTap: () => _quickSendHelp('medical_emergency'),
+                        onTap: () =>
+                            _quickSendHelp(sheetContext, 'medical_emergency'),
                       ),
                       _quickServiceButton(
                         label: 'Fire',
                         icon: Icons.local_fire_department,
                         color: Colors.deepOrange,
-                        onTap: () => _quickSendHelp('fire_emergency'),
+                        onTap: () =>
+                            _quickSendHelp(sheetContext, 'fire_emergency'),
+                      ),
+                      _quickServiceButton(
+                        label: 'Breakdown',
+                        icon: Icons.car_repair,
+                        color: AppTheme.neutralGray,
+                        onTap: () => _quickSendHelpWithDetails(
+                          sheetContext: sheetContext,
+                          categoryId: 'car_breakdown',
+                          dialogTitle: 'Vehicle Breakdown',
+                          hintText:
+                              'What happened? Exact location? Injuries? (optional)',
+                        ),
+                      ),
+                      _quickServiceButton(
+                        label: 'Other',
+                        icon: Icons.more_horiz,
+                        color: AppTheme.secondaryText,
+                        onTap: () => _quickSendHelpWithDetails(
+                          sheetContext: sheetContext,
+                          categoryId: 'other',
+                          dialogTitle: 'Other Help',
+                          hintText: 'Briefly describe what you need',
+                        ),
                       ),
                       _quickServiceButton(
                         label: 'Hazard',
                         icon: Icons.warning_amber,
                         color: AppTheme.warningOrange,
                         onTap: () {
-                          Navigator.of(context).pop();
+                          Navigator.of(sheetContext).pop();
                           _handleHazardAlertsAccess();
                         },
                       ),
@@ -3325,7 +3818,7 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
                         icon: Icons.call,
                         color: AppTheme.safeGreen,
                         onTap: () {
-                          Navigator.of(context).pop();
+                          Navigator.of(sheetContext).pop();
                           _showEmergencyContacts();
                         },
                       ),
@@ -3376,10 +3869,112 @@ class _SOSPageState extends State<SOSPage> with TickerProviderStateMixin {
     );
   }
 
-  Future<void> _quickSendHelp(String categoryId) async {
-    Navigator.of(context).pop();
+  Future<void> _quickSendHelp(
+    BuildContext sheetContext,
+    String categoryId,
+  ) async {
+    Navigator.of(sheetContext).pop();
     _selectedHelpCategory = categoryId;
     await _sendREDPINGPing();
+  }
+
+  Future<void> _quickSendHelpWithDetails({
+    required BuildContext sheetContext,
+    required String categoryId,
+    required String dialogTitle,
+    required String hintText,
+  }) async {
+    // Close the quick services sheet first.
+    Navigator.of(sheetContext).pop();
+    if (!mounted) return;
+
+    // Let the bottom sheet route fully pop before pushing another route.
+    await Future<void>.delayed(Duration.zero);
+
+    final details = await _showQuickServiceDetailsDialog(
+      title: dialogTitle,
+      hintText: hintText,
+    );
+
+    if (!mounted) return;
+    final trimmed = (details ?? '').trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+
+    _selectedHelpCategory = categoryId;
+    await _sendREDPINGPing(userMessageOverride: 'REDP!NG Help: $trimmed');
+  }
+
+  Future<String?> _showQuickServiceDetailsDialog({
+    required String title,
+    required String hintText,
+  }) async {
+    String value = '';
+    return showDialog<String>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppTheme.darkSurface,
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: AppTheme.primaryText,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          content: TextField(
+            autofocus: true,
+            maxLines: 3,
+            textInputAction: TextInputAction.done,
+            style: const TextStyle(color: AppTheme.primaryText),
+            decoration: InputDecoration(
+              hintText: hintText,
+              hintStyle: const TextStyle(color: AppTheme.secondaryText),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(
+                  color: AppTheme.neutralGray.withValues(alpha: 0.4),
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide(
+                  color: AppTheme.safeGreen.withValues(alpha: 0.8),
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            onChanged: (v) => value = v,
+            onSubmitted: (v) {
+              Navigator.of(dialogContext, rootNavigator: true).pop(v);
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext, rootNavigator: true).pop(),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: AppTheme.secondaryText),
+              ),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext, rootNavigator: true).pop(value),
+              child: const Text(
+                'Send',
+                style: TextStyle(
+                  color: AppTheme.safeGreen,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // ============================================================================
@@ -4462,7 +5057,8 @@ class _SosDeliveryStatusStrip extends StatefulWidget {
   const _SosDeliveryStatusStrip();
 
   @override
-  State<_SosDeliveryStatusStrip> createState() => _SosDeliveryStatusStripState();
+  State<_SosDeliveryStatusStrip> createState() =>
+      _SosDeliveryStatusStripState();
 }
 
 class _SosDeliveryStatusStripState extends State<_SosDeliveryStatusStrip> {
@@ -4553,15 +5149,20 @@ class _SosDeliveryStatusStripState extends State<_SosDeliveryStatusStrip> {
         : AppTheme.neutralGray.withValues(alpha: 0.12);
     Color chipFg(bool ok) => ok ? AppTheme.safeGreen : AppTheme.secondaryText;
 
-    Widget chip({required IconData icon, required String label, required bool ok}) {
+    Widget chip({
+      required IconData icon,
+      required String label,
+      required bool ok,
+    }) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: chipBg(ok),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: (ok ? AppTheme.safeGreen : AppTheme.neutralGray)
-                .withValues(alpha: 0.35),
+            color: (ok ? AppTheme.safeGreen : AppTheme.neutralGray).withValues(
+              alpha: 0.35,
+            ),
           ),
         ),
         child: Row(
@@ -4601,7 +5202,9 @@ class _SosDeliveryStatusStripState extends State<_SosDeliveryStatusStrip> {
               Icon(
                 effectivelyOffline ? Icons.cloud_off : Icons.cloud_done,
                 size: 14,
-                color: effectivelyOffline ? AppTheme.warningOrange : AppTheme.safeGreen,
+                color: effectivelyOffline
+                    ? AppTheme.warningOrange
+                    : AppTheme.safeGreen,
               ),
               const SizedBox(width: 6),
               Text(

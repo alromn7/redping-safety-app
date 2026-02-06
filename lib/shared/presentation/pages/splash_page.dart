@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/routing/app_router.dart';
 import '../../../services/auth_service.dart';
@@ -6,6 +7,8 @@ import '../../../services/onboarding_prefs.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/app/app_launch_config.dart';
 import '../../../core/app_variant.dart';
+import '../../../services/connectivity_monitor_service.dart';
+import '../../../core/constants/app_constants.dart';
 
 /// Splash screen with RedPing branding and initialization
 class SplashPage extends StatefulWidget {
@@ -64,7 +67,32 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     final router = GoRouter.of(context);
     await OnboardingPrefs.instance.ensureLoaded();
 
+    // Integration/dev testing: allow the SOS variant to boot directly to the
+    // core SOS UI without online auth gating.
+    if (!kReleaseMode &&
+        AppLaunchConfig.variant == AppVariant.emergency &&
+        AppConstants.testingModeEnabled) {
+      router.go(AppLaunchConfig.homeRoute);
+      return;
+    }
+
+    // Prime connectivity so SOS can decide offline vs online behavior.
+    bool effectivelyOffline = false;
+    try {
+      await ConnectivityMonitorService().initialize();
+      effectivelyOffline = ConnectivityMonitorService().isEffectivelyOffline;
+    } catch (_) {
+      effectivelyOffline = false;
+    }
+
     if (!mounted) return;
+
+    // SOS entrypoint: allow offline/unauthenticated access to the core SOS UI.
+    // When online, do not bypass login.
+    if (AppLaunchConfig.variant == AppVariant.emergency && effectivelyOffline) {
+      router.go(AppLaunchConfig.homeRoute);
+      return;
+    }
 
     // Check if user can bypass login (3+ successful logins on same device, <7 days)
     final canBypass = await auth.shouldBypassLogin();
@@ -80,8 +108,9 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       return;
     }
 
-    // SOS entrypoint: skip startup onboarding entirely.
-    if (AppLaunchConfig.skipStartupOnboarding) {
+    // SOS build: skip onboarding entirely (but only after auth checks when online).
+    if (AppLaunchConfig.variant == AppVariant.emergency &&
+        AppLaunchConfig.skipStartupOnboarding) {
       router.go(AppLaunchConfig.homeRoute);
       return;
     }

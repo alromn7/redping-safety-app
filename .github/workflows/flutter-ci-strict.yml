@@ -1,10 +1,9 @@
-name: Flutter CI
+name: Flutter CI (Strict)
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
 
 jobs:
   build:
@@ -14,10 +13,6 @@ jobs:
         app:
           - .
     steps:
-      # Temporary unblock workflow:
-      # Analyze/Test/Build steps currently use continue-on-error while
-      # existing main-branch analyzer/build debt is being cleaned up.
-      # Strict enforcement runs in flutter-ci-strict.yml.
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -32,19 +27,16 @@ jobs:
           flutter pub get
 
       - name: Analyze
-        continue-on-error: true
         run: |
           cd ${{ matrix.app }}
           flutter analyze
 
       - name: Test
-        continue-on-error: true
         run: |
           cd ${{ matrix.app }}
           flutter test
 
       - name: Build APK (debug)
-        continue-on-error: true
         run: |
           cd ${{ matrix.app }}
           flutter build apk --debug

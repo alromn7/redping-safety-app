@@ -109,7 +109,6 @@ dev_dependencies:
     sdk: flutter
   flutter_test:
     sdk: flutter
-  test: ^1.25.8
 
   # Linting & Code Generation
   flutter_lints: ^5.0.0

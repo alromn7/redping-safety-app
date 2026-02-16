@@ -12,8 +12,7 @@ jobs:
     strategy:
       matrix:
         app:
-          - redping_emergency_app
-          - redping_sar_app
+          - .
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
 import '../core/constants/app_constants.dart';
@@ -37,7 +38,8 @@ class SensorService {
   PowerMode? _powerModeOverride;
 
   static const double _testModeCrashThreshold = 78.4; // 8G in m/s²
-  static const double _testModeFallThreshold = 48.0; // ~0.3m drop impact in m/s²
+  static const double _testModeFallThreshold =
+      48.0; // ~0.3m drop impact in m/s²
 
   double _defaultCrashThreshold() {
     return AppConstants.testingModeEnabled ? _testModeCrashThreshold : 180.0;
@@ -73,6 +75,11 @@ class SensorService {
 
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
+  StreamSubscription<AccelerometerEvent>? _calibrationAccelerometerSubscription;
+  Timer? _calibrationTimeoutTimer;
+
+  DateTime? _lastAppOpenCalibrationAttempt;
+  static const Duration _appOpenCalibrationThrottle = Duration(seconds: 30);
 
   final List<SensorReading> _accelerometerBuffer = [];
   final List<SensorReading> _gyroscopeBuffer = [];
@@ -441,6 +448,38 @@ class SensorService {
 
   // ========== END PUBLIC API ==========
 
+  /// Trigger calibration on app open/resume.
+  ///
+  /// Requirement: calibration should run at most weekly.
+  ///
+  /// Behavior:
+  /// - If never calibrated: runs calibration.
+  /// - If calibrated but older than the configured interval: runs calibration.
+  /// - Otherwise: no-op.
+  ///
+  /// Safety: this runs in background and does NOT pause crash detection.
+  void triggerCalibrationOnAppOpen() {
+    final last = _lastAppOpenCalibrationAttempt;
+    if (last != null &&
+        DateTime.now().difference(last) < _appOpenCalibrationThrottle) {
+      return;
+    }
+    _lastAppOpenCalibrationAttempt = DateTime.now();
+
+    if (!_autoCalibrationEnabled) {
+      return;
+    }
+
+    // Fire-and-forget: never block UI or service startup.
+    Future.microtask(() async {
+      try {
+        await startCalibration();
+      } catch (e) {
+        debugPrint('SensorService: App-open calibration attempt failed: $e');
+      }
+    });
+  }
+
   /// Start monitoring sensors for crash and fall detection
   Future<void> startMonitoring({
     LocationService? locationService,
@@ -501,20 +540,11 @@ class SensorService {
 
     final samplingRate = _getSamplingRateForBattery();
 
-    // AUTO-CALIBRATION: Only run on initial startup, not on every restart
-    if (_autoCalibrationEnabled &&
-        !_hasRunInitialCalibration &&
-        _shouldRunCalibration()) {
-      debugPrint(
-        'SensorService: 🤖 Auto-calibration triggered (initial startup)',
-      );
-      _hasRunInitialCalibration = true; // Mark as completed
-      // Run calibration in background (don't block startup)
-      Future.delayed(const Duration(seconds: 5), () async {
-        if (!_isCalibrated || _isCalibrationOutdated()) {
-          await startCalibration();
-        }
-      });
+    // App-open calibration (runs in background, does not block startup).
+    // Runs only if calibration is missing/outdated (weekly).
+    if (_autoCalibrationEnabled && !_hasRunInitialCalibration) {
+      _hasRunInitialCalibration = true;
+      Future.delayed(const Duration(seconds: 2), triggerCalibrationOnAppOpen);
     }
 
     // Apply device-specific sensor profile if not yet calibrated
@@ -541,10 +571,19 @@ class SensorService {
         samplingPeriod: Duration(milliseconds: samplingRate),
       ).listen(_handleAccelerometerEvent);
 
-      // Start gyroscope monitoring
-      _gyroscopeSubscription = gyroscopeEventStream(
-        samplingPeriod: Duration(milliseconds: samplingRate),
-      ).listen(_handleGyroscopeEvent);
+      // Start gyroscope monitoring (optional; some devices do not have one).
+      try {
+        _gyroscopeSubscription = gyroscopeEventStream(
+          samplingPeriod: Duration(milliseconds: samplingRate),
+        ).listen(_handleGyroscopeEvent);
+      } on PlatformException catch (e) {
+        // Example: PlatformException(NO_SENSOR, Sensor not found, ...)
+        debugPrint('SensorService: Gyroscope unavailable - $e');
+        _gyroscopeSubscription = null;
+      } catch (e) {
+        debugPrint('SensorService: Gyroscope stream failed - $e');
+        _gyroscopeSubscription = null;
+      }
 
       // Optional: Start location tracking for movement/speed heuristics.
       if (locationService != null) {
@@ -598,6 +637,10 @@ class SensorService {
   void stopMonitoring() {
     _accelerometerSubscription?.cancel();
     _gyroscopeSubscription?.cancel();
+    _calibrationTimeoutTimer?.cancel();
+    _calibrationTimeoutTimer = null;
+    _calibrationAccelerometerSubscription?.cancel();
+    _calibrationAccelerometerSubscription = null;
     _batteryCheckTimer?.cancel();
     _accelerometerSubscription = null;
     _gyroscopeSubscription = null;
@@ -717,11 +760,19 @@ class SensorService {
 
   /// Start automatic calibration - measures baseline when phone is stationary
   /// Call this when app starts or when user is in a safe, stationary location
-  Future<void> startCalibration() async {
+  Future<void> startCalibration({bool force = false}) async {
     if (_isCalibrating) {
       debugPrint('SensorService: Calibration already in progress');
       return;
     }
+
+    if (!force && !_shouldRunCalibration()) {
+      return;
+    }
+
+    // Cancel any previous calibration attempt.
+    await _calibrationAccelerometerSubscription?.cancel();
+    _calibrationTimeoutTimer?.cancel();
 
     _isCalibrating = true;
     _calibrationSamples.clear();
@@ -730,20 +781,79 @@ class SensorService {
       'SensorService: Starting sensor calibration - Keep phone still for 10 seconds...',
     );
 
-    // Calibration will happen automatically as sensor events arrive
-    // After 100 samples (10 seconds at 10Hz), calibration completes
+    // Important: do NOT rely on the monitoring sampling rate (can be 1Hz+ in low power).
+    // Use a dedicated short-lived calibration stream at ~10Hz.
+    const calibrationSampling = Duration(milliseconds: 100);
+    const stationaryMin = 7.5;
+    const stationaryMax = 12.5;
 
-    // Wait for calibration to complete
-    await Future.delayed(const Duration(seconds: 12));
+    final completer = Completer<void>();
 
-    if (_calibrationSamples.length >= _calibrationSampleCount) {
-      _completeCalibration();
-    } else {
-      debugPrint(
-        'SensorService: Calibration failed - not enough samples (${_calibrationSamples.length}/$_calibrationSampleCount)',
-      );
-      _isCalibrating = false;
-    }
+    _calibrationTimeoutTimer = Timer(const Duration(seconds: 15), () async {
+      await _calibrationAccelerometerSubscription?.cancel();
+      _calibrationAccelerometerSubscription = null;
+      if (_calibrationSamples.length >= _calibrationSampleCount) {
+        _completeCalibration();
+      } else {
+        debugPrint(
+          'SensorService: Calibration failed - not enough stationary samples (${_calibrationSamples.length}/$_calibrationSampleCount)',
+        );
+        _isCalibrating = false;
+        _calibrationSamples.clear();
+      }
+      if (!completer.isCompleted) completer.complete();
+    });
+
+    _calibrationAccelerometerSubscription =
+        accelerometerEventStream(samplingPeriod: calibrationSampling).listen(
+          (event) async {
+            if (!_isCalibrating) return;
+            if (!_isValidSensorReading(event.x, event.y, event.z)) {
+              return;
+            }
+
+            final magnitude = sqrt(
+              (event.x * event.x) + (event.y * event.y) + (event.z * event.z),
+            );
+
+            // Only accept samples that look stationary (gravity-only).
+            if (magnitude < stationaryMin || magnitude > stationaryMax) {
+              return;
+            }
+
+            if (_calibrationSamples.length < _calibrationSampleCount) {
+              _calibrationSamples.add(magnitude);
+              if (_calibrationSamples.length == 1 ||
+                  _calibrationSamples.length == 50 ||
+                  _calibrationSamples.length >= 95) {
+                debugPrint(
+                  'SensorService: Calibration progress: ${_calibrationSamples.length}/$_calibrationSampleCount samples',
+                );
+              }
+            }
+
+            if (_calibrationSamples.length >= _calibrationSampleCount) {
+              await _calibrationAccelerometerSubscription?.cancel();
+              _calibrationAccelerometerSubscription = null;
+              _calibrationTimeoutTimer?.cancel();
+              _calibrationTimeoutTimer = null;
+              _completeCalibration();
+              if (!completer.isCompleted) completer.complete();
+            }
+          },
+          onError: (e) async {
+            debugPrint('SensorService: Calibration stream error: $e');
+            await _calibrationAccelerometerSubscription?.cancel();
+            _calibrationAccelerometerSubscription = null;
+            _calibrationTimeoutTimer?.cancel();
+            _calibrationTimeoutTimer = null;
+            _isCalibrating = false;
+            _calibrationSamples.clear();
+            if (!completer.isCompleted) completer.complete();
+          },
+        );
+
+    await completer.future;
   }
 
   /// Complete calibration and calculate baseline + noise factor
@@ -761,6 +871,16 @@ class SensorService {
             .reduce((a, b) => a + b) /
         _calibrationSamples.length;
     final stdDev = sqrt(variance);
+
+    // Reject clearly non-stationary calibration windows (prevents corrupting calibration)
+    if (_calibratedGravity < 8.0 || _calibratedGravity > 12.0 || stdDev > 1.5) {
+      debugPrint(
+        'SensorService: Calibration rejected (not stationary). avg=${_calibratedGravity.toStringAsFixed(2)} std=${stdDev.toStringAsFixed(2)}',
+      );
+      _isCalibrating = false;
+      _calibrationSamples.clear();
+      return;
+    }
 
     // Noise factor: how much the sensor fluctuates when stationary
     // Higher value = noisier sensor = need more filtering
@@ -1112,21 +1232,6 @@ class SensorService {
 
     final rawMagnitude = reading.magnitude;
 
-    // CALIBRATION MODE: Collect baseline samples when phone is stationary
-    if (_isCalibrating &&
-        _calibrationSamples.length < _calibrationSampleCount) {
-      _calibrationSamples.add(rawMagnitude);
-      // Reduced logging - only at start, 50%, and near completion
-      if (_calibrationSamples.length == 1 ||
-          _calibrationSamples.length == 50 ||
-          _calibrationSamples.length >= 95) {
-        debugPrint(
-          'SensorService: Calibration progress: ${_calibrationSamples.length}/$_calibrationSampleCount samples',
-        );
-      }
-      return; // Don't process readings during calibration
-    }
-
     // CONVERT RAW SENSOR DATA TO REAL-WORLD ACCELERATION
     // This is the critical step that makes crash detection accurate
     final magnitude = _isCalibrated
@@ -1324,7 +1429,6 @@ class SensorService {
 
     // Evaluate power mode based on recent motion
     _maybeAdjustPowerMode(magnitude: magnitude);
-
   }
 
   /// Update motion tracking (lightweight, always runs)
@@ -1558,7 +1662,6 @@ class SensorService {
     }
 
     _addToBuffer(_gyroscopeBuffer, reading);
-
   }
 
   /// Add reading to buffer and maintain size limit
@@ -1650,8 +1753,9 @@ class SensorService {
         magnitude >= _violentHandlingThreshold &&
         magnitude < _violentHandlingMaxThreshold;
 
-    // TRIGGER: Violent handling detected if ANY pattern matches
-    if (hasThrowPattern || (hasHighImpact && hasRotation) || hasHighImpact) {
+    // TRIGGER: Violent handling detected only when the pattern indicates an
+    // actual throw/tumble (free-fall and/or rotation), not just a single bump.
+    if (hasThrowPattern || (hasHighImpact && hasRotation)) {
       _lastViolentHandlingDetection = DateTime.now();
       _violentHandlingCount++;
 
@@ -2335,6 +2439,34 @@ class SensorService {
     _gyroscopeBuffer.clear();
   }
 
+  @visibleForTesting
+  void debugResetForTest() {
+    _clearBuffers();
+    _lastViolentHandlingDetection = null;
+    _violentHandlingCount = 0;
+    _sessionStartTime = null;
+  }
+
+  @visibleForTesting
+  bool debugIsValidSensorReading(double x, double y, double z) {
+    return _isValidSensorReading(x, y, z);
+  }
+
+  @visibleForTesting
+  void debugAddAccelerometerReading(SensorReading reading) {
+    _addToBuffer(_accelerometerBuffer, reading);
+  }
+
+  @visibleForTesting
+  void debugAddGyroscopeReading(SensorReading reading) {
+    _addToBuffer(_gyroscopeBuffer, reading);
+  }
+
+  @visibleForTesting
+  void debugCheckForViolentHandling(SensorReading reading) {
+    _checkForViolentHandling(reading);
+  }
+
   /// Validate sensor reading values to prevent extreme/invalid data
   bool _isValidSensorReading(double x, double y, double z) {
     // Check for NaN or infinite values
@@ -2342,10 +2474,11 @@ class SensorService {
       return false;
     }
 
-    // Check for extremely large values that could indicate sensor malfunction
-    // Realistic max for phone sensors: ~40 m/s² (4G force)
-    // Anything above 50 m/s² is likely sensor error
-    const double maxReasonableValue = 50.0; // m/s²
+    // Check for extremely large values that could indicate sensor malfunction.
+    // Many phones support up to ±16g (≈156.8 m/s²) and some up to ±32g
+    // (≈313.6 m/s²). We must allow high-G events or crash/fall detection
+    // becomes impossible.
+    const double maxReasonableValue = 400.0; // m/s² (~40g)
     if (x.abs() > maxReasonableValue ||
         y.abs() > maxReasonableValue ||
         z.abs() > maxReasonableValue) {
@@ -2408,7 +2541,9 @@ class SensorService {
     if (_isMonitoring && _isLowPowerMode) {
       stopMonitoring();
       await Future.delayed(const Duration(milliseconds: 100));
-      await startMonitoring(lowPowerMode: _powerModeOverride == PowerMode.high ? false : true);
+      await startMonitoring(
+        lowPowerMode: _powerModeOverride == PowerMode.high ? false : true,
+      );
     }
   }
 
@@ -3157,6 +3292,9 @@ class SensorService {
 
   void dispose() {
     stopMonitoring();
+    _calibrationTimeoutTimer?.cancel();
+    _calibrationAccelerometerSubscription?.cancel();
+    _calibrationAccelerometerSubscription = null;
     _batteryCheckTimer?.cancel();
     _patternUpdateTimer?.cancel(); // Cancel pattern learning timer
     _movementTimeoutTimer?.cancel();

@@ -119,7 +119,7 @@ class OfflineSOSQueueService {
   }
 
   /// Attempt to deliver queued SOS sessions.
-  Future<void> processQueue() async {
+  Future<void> processQueue({bool bypassStartupGrace = false}) async {
     if (_queue.isEmpty) return;
     final now = DateTime.now();
     final copy = List<_QueuedSOS>.from(_queue);
@@ -255,6 +255,20 @@ class OfflineSOSQueueService {
       return SOSSession.fromJson(jsonDecode(q.sessionJson));
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<void> loadQueueOnly() async {
+    await _load();
+  }
+
+  Future<void> remove(String sessionId, {String? reason}) async {
+    _queue.removeWhere((q) => q.id == sessionId);
+    await _save();
+    if (_queue.isEmpty) {
+      try {
+        await ForegroundServiceManager.stop();
+      } catch (_) {}
     }
   }
 

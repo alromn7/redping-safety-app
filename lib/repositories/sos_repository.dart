@@ -9,6 +9,16 @@ import '../services/emergency_contacts_service.dart';
 import '../services/location_service.dart';
 import '../services/connectivity_monitor_service.dart';
 
+class ActivationLockResult {
+  final bool lockHeldByOther;
+  final String? existingActiveSessionId;
+
+  const ActivationLockResult({
+    this.lockHeldByOther = false,
+    this.existingActiveSessionId,
+  });
+}
+
 /// Repository responsible for persisting SOS sessions to Firestore.
 /// Centralizes create/update logic and ensures data is safe for Firestore.
 class SosRepository {
@@ -241,6 +251,110 @@ class SosRepository {
     } catch (e) {
       _maybeLogOfflineError('get active session', e);
       return null;
+    }
+  }
+
+  Future<SOSSession?> getSessionById(String sessionId) async {
+    try {
+      final snap = await _collection.doc(sessionId).get();
+      if (!snap.exists) return null;
+      final data = snap.data();
+      if (data == null) return null;
+      return _parseSessionFromFirestore(sessionId, data);
+    } catch (e) {
+      _maybeLogOfflineError('get session by id', e);
+      return null;
+    }
+  }
+
+  Future<SOSSession?> findMostRecentActiveSessionByUser(String userId) async {
+    try {
+      final statuses = <String>[
+        'countdown',
+        'active',
+        'acknowledged',
+        'assigned',
+        'en_route',
+        'on_scene',
+        'in_progress',
+      ];
+
+      final query = await _collection
+          .where('userId', isEqualTo: userId)
+          .where('status', whereIn: statuses)
+          .limit(10)
+          .get();
+
+      if (query.docs.isEmpty) return null;
+
+      final docs = query.docs.toList()
+        ..sort((a, b) {
+          final aStart = (a.data()['startTime'] ?? '').toString();
+          final bStart = (b.data()['startTime'] ?? '').toString();
+          return bStart.compareTo(aStart);
+        });
+
+      final first = docs.first;
+      return _parseSessionFromFirestore(first.id, first.data());
+    } catch (e) {
+      _maybeLogOfflineError('find recent active session', e);
+      return null;
+    }
+  }
+
+  Future<ActivationLockResult> tryAcquireActivationLock({
+    required String userId,
+    required String ownerKey,
+  }) async {
+    try {
+      final stateRef = FirebaseFirestore.instance.doc('users/$userId/meta/state');
+      final snap = await stateRef.get();
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final activeSessionId = (data['activeSessionId'] ?? '').toString().trim();
+      if (activeSessionId.isNotEmpty) {
+        return ActivationLockResult(existingActiveSessionId: activeSessionId);
+      }
+
+      final existingOwner =
+          (data['activationLockOwnerKey'] ?? '').toString().trim();
+      if (existingOwner.isNotEmpty && existingOwner != ownerKey) {
+        return const ActivationLockResult(lockHeldByOther: true);
+      }
+
+      await stateRef.set({
+        'activationLockOwnerKey': ownerKey,
+        'activationLockUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      return const ActivationLockResult();
+    } catch (e) {
+      _maybeLogOfflineError('acquire activation lock', e);
+      return const ActivationLockResult();
+    }
+  }
+
+  Future<void> releaseActivationLock({
+    required String userId,
+    required String ownerKey,
+  }) async {
+    try {
+      final stateRef = FirebaseFirestore.instance.doc('users/$userId/meta/state');
+      final snap = await stateRef.get();
+      final data = snap.data() ?? <String, dynamic>{};
+      final existingOwner =
+          (data['activationLockOwnerKey'] ?? '').toString().trim();
+
+      if (existingOwner.isNotEmpty && existingOwner != ownerKey) {
+        return;
+      }
+
+      await stateRef.set({
+        'activationLockOwnerKey': FieldValue.delete(),
+        'activationLockUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      _maybeLogOfflineError('release activation lock', e);
     }
   }
 

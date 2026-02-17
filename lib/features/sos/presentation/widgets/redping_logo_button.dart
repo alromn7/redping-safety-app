@@ -16,6 +16,7 @@ class RedPingLogoButton extends StatefulWidget {
   final int holdSeconds; // Seconds required to hold before activation
   // New: reflect SOS state on visuals (green border when activated)
   final bool isSosActivated;
+  final bool enableDisappearEffect;
 
   const RedPingLogoButton({
     super.key,
@@ -26,6 +27,7 @@ class RedPingLogoButton extends StatefulWidget {
     this.onHoldToActivate,
     this.holdSeconds = 5,
     this.isSosActivated = false,
+    this.enableDisappearEffect = false,
   });
 
   @override

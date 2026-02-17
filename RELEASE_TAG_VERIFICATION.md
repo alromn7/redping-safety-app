@@ -591,3 +591,21 @@ Outcome:
 
 Supporting artifact:
 - `SOS_DUPLICATE_PROOF_RUN_2026-02-16.md` (second run section appended)
+
+## 4i. Production Release Published (2026-02-17)
+
+Release target and publication:
+- Tag created/pushed: `v1.0.1+6`
+- Tag commit SHA: `d9b0048499b52f7b3e1b2f6797285f4f98176e41`
+- GitHub Release: `https://github.com/alromn7/redping-safety-app/releases/tag/v1.0.1%2B6`
+- Release status: published (`isDraft=false`, `isPrerelease=false`)
+
+CI hardening and verification completed before release cut:
+- Strict workflow (hard-fail) passing on `main`:
+  - `https://github.com/alromn7/redping-safety-app/actions/runs/22087602487`
+- Main workflow restored to strict gates (temporary `continue-on-error` removed) and passing:
+  - `https://github.com/alromn7/redping-safety-app/actions/runs/22088576061`
+
+Notes:
+- Main CI and strict CI now both use the SOS build target for APK validation:
+  - `flutter build apk --debug --flavor sos -t lib/main_sos.dart`

@@ -36,7 +36,7 @@ jobs:
           cd ${{ matrix.app }}
           flutter test
 
-      - name: Build APK (debug)
+      - name: Build APK (debug, SOS flavor)
         run: |
           cd ${{ matrix.app }}
-          flutter build apk --debug
+          flutter build apk --debug --flavor sos -t lib/main_sos.dart

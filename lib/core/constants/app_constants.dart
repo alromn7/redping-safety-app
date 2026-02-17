@@ -14,8 +14,10 @@ class AppConstants {
 
   // SOS Configuration
   static const int sosCountdownSeconds = 10;
+  static const int acfdOfficialCountdownSeconds = 30;
   static const int heartbeatAnimationDurationMs = 1000;
   static const int emergencyVibrationPattern = 500;
+  static const double highSpeedCrashBypassThreshold = 70.0;
 
   // Location & Tracking
   static const double locationAccuracyThreshold = 10.0; // meters

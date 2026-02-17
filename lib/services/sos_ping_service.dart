@@ -1614,6 +1614,92 @@ class SOSPingService {
     await _savePings();
   }
 
+  SOSPing? getPingById(String pingId) => _findPingById(pingId);
+
+  Future<void> publishHelpRequestUpdate({
+    required String pingId,
+    required String updateText,
+  }) async {
+    final trimmed = updateText.trim();
+    if (trimmed.isEmpty) return;
+
+    final ping = _findPingById(pingId);
+    if (ping != null) {
+      final updated = ping.copyWith(
+        userMessage: trimmed,
+        metadata: {
+          ...ping.metadata,
+          'latestUserUpdate': trimmed,
+          'latestUserUpdateAt': DateTime.now().toIso8601String(),
+        },
+      );
+      _updatePingInLists(updated);
+      await _savePings();
+    }
+
+    try {
+      await FirebaseFirestore.instance.collection('help_requests').doc(pingId).set({
+        'latestUserUpdate': trimmed,
+        'description': trimmed,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
+
+    try {
+      await FirebaseFirestore.instance.collection('sos_pings').doc(pingId).set({
+        'latestUserUpdate': trimmed,
+        'userMessage': trimmed,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
+  }
+
+  Future<void> closeHelpRequest({
+    required String pingId,
+    String? closureNote,
+  }) async {
+    final ping = _findPingById(pingId);
+    if (ping != null) {
+      final updated = ping.copyWith(
+        status: SOSPingStatus.resolved,
+        metadata: {
+          ...ping.metadata,
+          'closedBy': 'user',
+          'closureNote': closureNote ?? '',
+          'closedAt': DateTime.now().toIso8601String(),
+        },
+      );
+      _activePings.removeWhere((p) => p.id == pingId);
+      _updatePingInLists(updated);
+      await _savePings();
+    }
+
+    final update = <String, dynamic>{
+      'status': 'resolved',
+      'updatedAt': FieldValue.serverTimestamp(),
+      if ((closureNote ?? '').trim().isNotEmpty)
+        'latestUserUpdate': (closureNote ?? '').trim(),
+      if ((closureNote ?? '').trim().isNotEmpty)
+        'description': (closureNote ?? '').trim(),
+      if ((closureNote ?? '').trim().isNotEmpty)
+        'userMessage': (closureNote ?? '').trim(),
+    };
+
+    try {
+      await FirebaseFirestore.instance.collection('help_requests').doc(pingId).set(
+            update,
+            SetOptions(merge: true),
+          );
+    } catch (_) {}
+
+    try {
+      await FirebaseFirestore.instance.collection('sos_pings').doc(pingId).set(
+            update,
+            SetOptions(merge: true),
+          );
+    } catch (_) {}
+  }
+
   /// Helper method to find ping by ID
   SOSPing? _findPingById(String pingId) {
     try {

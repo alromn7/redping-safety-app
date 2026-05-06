@@ -62,3 +62,10 @@ key.properties
 docs/*firebase-adminsdk*.json
 docs/*service_account*.json
 secure_credentials/
+android/play/service-account.json
+android/app/google-services*.backup
+ios/Runner/GoogleService-Info*.backup
+android/app/google-services.local.json
+ios/Runner/GoogleService-Info.local.plist
+ios/Runner/GoogleService-Info-SAR.local.plist
+lib/firebase_options.local.dart

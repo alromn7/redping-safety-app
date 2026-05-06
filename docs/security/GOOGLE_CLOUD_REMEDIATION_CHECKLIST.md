@@ -27,6 +27,7 @@ This checklist is for project `redping-a2e37` after Google Cloud suspended it fo
    - `ios/Runner/GoogleService-Info.plist`
    - `ios/Runner/GoogleService-Info-SAR.plist`
    - `lib/firebase_options.dart` via FlutterFire CLI or local-only defines
+   - follow `docs/security/FIREBASE_CLIENT_KEY_REPLACEMENT_RUNBOOK.md` before revoking the active Firebase client keys
 2. Recreate any Firebase Admin credential usage from secret storage, not docs or repo files.
 3. Verify no backup copies of credential files remain in downloads, desktop folders, or shared drives.
 4. Review CI/CD secrets for stale Google credentials and rotate them if they were ever derived from the exposed material.

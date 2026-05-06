@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>API_KEY</key>
-	<string>REDACTED_FIREBASE_ANDROID_API_KEY</string>
+	<string>REDACTED_FIREBASE_IOS_API_KEY</string>
 	<key>GCM_SENDER_ID</key>
 	<string>557287609270</string>
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.redping.redping</string>
+	<string>com.romana.redping.sos</string>
 	<key>PROJECT_ID</key>
 	<string>redping-a2e37</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:557287609270:ios:ee97c332c47695a6832717</string>
+	<string>1:557287609270:ios:e9d9a07f62e910b7832717</string>
 </dict>
 </plist>

@@ -28,11 +28,10 @@ These keys are still active because Firebase currently emits them in the generat
 
 ## Confirmed Blocker
 
-- The rewritten repo iOS target currently builds with `PRODUCT_BUNDLE_IDENTIFIER = com.redping.redping`.
-- The checked-in `ios/Runner/GoogleService-Info.plist` also points at `BUNDLE_ID = com.redping.redping` and an invalid reused `GOOGLE_APP_ID` value.
-- That local iOS configuration does not match the active Firebase iOS SOS app `com.romana.redping.sos`.
+- The approved Firebase iOS SOS app is `com.romana.redping.sos`.
+- The rewritten repo has now been realigned locally to that bundle ID and Firebase iOS app ID while keeping the API key redacted.
 - Do not register `com.redping.redping` as a new Firebase iOS app for this remediation path unless product requirements explicitly change.
-- Do not rotate the iOS Firebase client key or trust downloaded iOS config until the local iOS bundle and plist are realigned to `com.romana.redping.sos` or another explicitly approved iOS production bundle.
+- Do not rotate the iOS Firebase client key until a fresh local plist is downloaded from Firebase Console or `firebase apps:sdkconfig ios` and validated in a non-committed workspace.
 
 ## Safe Replacement Procedure
 
@@ -65,6 +64,6 @@ Stop and do not revoke the client keys yet if any of the following is true:
 
 - downloaded Firebase config still contains the same exposed key value
 - the exact active iOS bundle IDs or Android package names are unclear
-- the local iOS target bundle ID or checked-in plist does not match the approved live Firebase iOS app registration
+- the local iOS target bundle ID or checked-in plist has drifted away from the approved live Firebase iOS app registration
 - auth or app initialization fails with the staged replacement config
 - the change would require unreviewed edits to locked SOS production files

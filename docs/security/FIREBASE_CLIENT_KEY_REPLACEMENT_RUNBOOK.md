@@ -33,6 +33,14 @@ These keys are still active because Firebase currently emits them in the generat
 - Do not register `com.redping.redping` as a new Firebase iOS app for this remediation path unless product requirements explicitly change.
 - Do not rotate the iOS Firebase client key until a fresh local plist is downloaded from Firebase Console or `firebase apps:sdkconfig ios` and validated in a non-committed workspace.
 
+## Verified Local-Only Refresh
+
+- On 2026-05-06, a fresh iOS plist for `1:557287609270:ios:e9d9a07f62e910b7832717` was downloaded to a temporary path outside the repo using `firebase apps:sdkconfig ios`.
+- The downloaded plist contained a live API key, but that key was not printed, copied into the repository, or committed.
+- Non-secret fields were verified to match the checked-in redacted plist after local realignment: `BUNDLE_ID`, `GOOGLE_APP_ID`, `PROJECT_ID`, `GCM_SENDER_ID`, `STORAGE_BUCKET`, and Firebase feature flags.
+- The temporary plist was deleted immediately after verification.
+- Remaining gate: runtime validation on iOS with fresh local-only config before rotating the iOS client key resource.
+
 ## Safe Replacement Procedure
 
 1. In Firebase Console, open project `redping-a2e37` and review the registered Android, iOS, and web apps.

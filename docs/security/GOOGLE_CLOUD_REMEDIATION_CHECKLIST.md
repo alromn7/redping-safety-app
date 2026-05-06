@@ -44,6 +44,12 @@ This checklist is for project `redping-a2e37` after Google Cloud suspended it fo
 2. Remove stale local clones that still contain leaked history.
 3. Invalidate cached archives, exported zips, and copied working folders that may still hold secrets.
 
+## Appeal Status
+
+- Appeal submitted to Google Cloud on 2026-05-06.
+- Submission included the completed git history scrub and Firebase Admin service-account key removals.
+- Firebase client key replacement remains pending because the current Firebase project configuration still emits those active keys.
+
 ## Appeal Draft
 
 Use this as the basis for the Google Cloud appeal after rotation and cleanup are complete:

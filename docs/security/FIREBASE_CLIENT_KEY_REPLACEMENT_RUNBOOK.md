@@ -41,6 +41,13 @@ These keys are still active because Firebase currently emits them in the generat
 - The temporary plist was deleted immediately after verification.
 - Remaining gate: runtime validation on iOS with fresh local-only config before rotating the iOS client key resource.
 
+## Current Validation Blocker
+
+- A local iOS simulator build was attempted after the bundle/plist realignment using `flutter build ios --simulator --debug --no-codesign`.
+- The build did not fail on Firebase identity mismatch.
+- It stopped earlier in `pod install` with an existing CocoaPods dependency resolution conflict involving ML Kit pods, specifically `google_mlkit_text_recognition` and the transitive `MLKitVision` / `MLKitCommon` version requirements.
+- Treat this as an environment or dependency blocker for runtime validation, not as evidence that the Firebase iOS realignment is wrong.
+
 ## Safe Replacement Procedure
 
 1. In Firebase Console, open project `redping-a2e37` and review the registered Android, iOS, and web apps.

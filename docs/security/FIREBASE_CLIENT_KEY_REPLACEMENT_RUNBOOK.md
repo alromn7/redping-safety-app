@@ -20,15 +20,19 @@ These keys are still active because Firebase currently emits them in the generat
 ## Verified Live App Identifiers
 
 - Android app `1:557287609270:android:ee97c332c47695a6832717` is `com.redping.redping` and matches the rewritten repo Android application ID.
-- iOS app `1:557287609270:ios:e9d9a07f62e910b7832717` is `com.romana.redping.sos`.
+- Verified SHA-1 hashes for Android app `1:557287609270:android:ee97c332c47695a6832717`: `df3043a5f6295bed6cf3b7b2753dc5d97626b88a`, `406fc289d379cd0a22d7329a607abc7e91733b8a`, `1296513c200bdecb695651ba416f5f68eb71d125`, `329e6b8324ae7585440ab51c7ebbbd5c04597698`, `443a5328d2ec1f0bf353e6035226f9ff76cb9950`.
+- Verified SHA-256 hashes for Android app `1:557287609270:android:ee97c332c47695a6832717`: `4a6adab5cd9ad2fa5670cd0222d470a1666b821f49d5266f4b1397ad57b500a9`, `53b37f0b16d52918a6c4d0477200a3214b334f5fd36d1467768a05574215f469`.
+- iOS app `1:557287609270:ios:e9d9a07f62e910b7832717` is `com.romana.redping.sos` and is the active Firebase iOS app for SOS.
 - iOS app `1:557287609270:ios:3d8ac6cbc0c84ebe832717` is `com.redping.sar`.
 - Web app `1:557287609270:web:3bd44b87fdf7a324832717` is `redping_14v (web)`.
 
 ## Confirmed Blocker
 
 - The rewritten repo iOS target currently builds with `PRODUCT_BUNDLE_IDENTIFIER = com.redping.redping`.
-- That bundle ID does not match either live Firebase iOS app registration in project `redping-a2e37`.
-- Do not rotate the iOS Firebase client key or trust downloaded iOS config until the intended iOS bundle ID and Firebase app registration are explicitly aligned.
+- The checked-in `ios/Runner/GoogleService-Info.plist` also points at `BUNDLE_ID = com.redping.redping` and an invalid reused `GOOGLE_APP_ID` value.
+- That local iOS configuration does not match the active Firebase iOS SOS app `com.romana.redping.sos`.
+- Do not register `com.redping.redping` as a new Firebase iOS app for this remediation path unless product requirements explicitly change.
+- Do not rotate the iOS Firebase client key or trust downloaded iOS config until the local iOS bundle and plist are realigned to `com.romana.redping.sos` or another explicitly approved iOS production bundle.
 
 ## Safe Replacement Procedure
 
@@ -61,6 +65,6 @@ Stop and do not revoke the client keys yet if any of the following is true:
 
 - downloaded Firebase config still contains the same exposed key value
 - the exact active iOS bundle IDs or Android package names are unclear
-- the local iOS target bundle ID does not match a live Firebase iOS app registration
+- the local iOS target bundle ID or checked-in plist does not match the approved live Firebase iOS app registration
 - auth or app initialization fails with the staged replacement config
 - the change would require unreviewed edits to locked SOS production files

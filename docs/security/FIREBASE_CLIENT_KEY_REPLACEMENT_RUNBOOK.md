@@ -17,6 +17,19 @@ These keys are still active because Firebase currently emits them in the generat
 - `ios/Runner/GoogleService-Info.plist` and any flavor-specific plist must be downloaded from Firebase Console for the exact iOS bundle IDs in use.
 - `lib/firebase_options.dart` must be regenerated from FlutterFire CLI or replaced from a trusted local-only source.
 
+## Verified Live App Identifiers
+
+- Android app `1:557287609270:android:ee97c332c47695a6832717` is `com.redping.redping` and matches the rewritten repo Android application ID.
+- iOS app `1:557287609270:ios:e9d9a07f62e910b7832717` is `com.romana.redping.sos`.
+- iOS app `1:557287609270:ios:3d8ac6cbc0c84ebe832717` is `com.redping.sar`.
+- Web app `1:557287609270:web:3bd44b87fdf7a324832717` is `redping_14v (web)`.
+
+## Confirmed Blocker
+
+- The rewritten repo iOS target currently builds with `PRODUCT_BUNDLE_IDENTIFIER = com.redping.redping`.
+- That bundle ID does not match either live Firebase iOS app registration in project `redping-a2e37`.
+- Do not rotate the iOS Firebase client key or trust downloaded iOS config until the intended iOS bundle ID and Firebase app registration are explicitly aligned.
+
 ## Safe Replacement Procedure
 
 1. In Firebase Console, open project `redping-a2e37` and review the registered Android, iOS, and web apps.
@@ -48,5 +61,6 @@ Stop and do not revoke the client keys yet if any of the following is true:
 
 - downloaded Firebase config still contains the same exposed key value
 - the exact active iOS bundle IDs or Android package names are unclear
+- the local iOS target bundle ID does not match a live Firebase iOS app registration
 - auth or app initialization fails with the staged replacement config
 - the change would require unreviewed edits to locked SOS production files
